@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Disk Space Analyzer is a free Windows app that maps every file on a drive, then helps you clean, shrink and move files to the right drive, checking every copy byte for byte.">
+<meta property="og:title" content="Disk Space Analyzer">
+<meta property="og:description" content="See what fills your drive, then free it up. A free 330 KB app for Windows 10 and 11.">
+<style>:root{color-scheme:light}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Disk Space Analyzer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one drive, read top to bottom. A live treemap opens the page, then one band per thing the app does: see, clean, shrink, move. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-2: #eaeef3;
+  --ink: #12161c;
+  --ink-2: #485263;
+  --ink-3: #788294;
+  --line: #d9dfe7;
+  --accent: #2a78d6;
+  --accent-ink: #1c5cab;
+  --accent-tint: #e1edfb;
+  --good: #0f8a3c;
+  --code-bg: #10151c;
+  --code-ink: #dbe4ef;
+  --code-dim: #7d8a9c;
+
+  /* Treemap categories: the app's validated palette, in its fixed order */
+  --c0: #2a78d6; --c1: #eb6834; --c2: #1baf7a; --c3: #eda100; --c4: #e87ba4;
+  --c5: #008300; --c6: #6250d6; --c7: #e34948; --c8: #898781; --c9: #52514e;
+  --map-gap: #c3c2b7;
+  --map-dim: #e1e0d9;
+
+  --display: "Bricolage Grotesque", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --body: "Instrument Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+
+  --step--1: 0.875rem;
+  --step-0: 1.0625rem;
+  --step-1: 1.3rem;
+  --step-2: clamp(1.6rem, 1.2rem + 1.6vw, 2.2rem);
+  --step-3: clamp(2.3rem, 1.4rem + 3.8vw, 4.1rem);
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1014; --surface: #151a21; --surface-2: #1c222b; --ink: #edf1f6; --ink-2: #b2bccb; --ink-3: #7d8899;
+    --line: #29313c; --accent: #3987e5; --accent-ink: #86b6ef; --accent-tint: #15263b; --good: #3ccf73;
+    --code-bg: #090c10; --code-ink: #dbe4ef; --code-dim: #7d8a9c;
+    --c0: #3987e5; --c1: #d95926; --c2: #199e70; --c3: #c98500; --c4: #d55181; --c5: #008300; --c6: #9085e9; --c7: #e66767; --c8: #898781; --c9: #5f5e5a;
+    --map-gap: #3a3a37; --map-dim: #2a2a28;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1014; --surface: #151a21; --surface-2: #1c222b; --ink: #edf1f6; --ink-2: #b2bccb; --ink-3: #7d8899;
+  --line: #29313c; --accent: #3987e5; --accent-ink: #86b6ef; --accent-tint: #15263b; --good: #3ccf73;
+  --code-bg: #090c10; --code-ink: #dbe4ef; --code-dim: #7d8a9c;
+  --c0: #3987e5; --c1: #d95926; --c2: #199e70; --c3: #c98500; --c4: #d55181; --c5: #008300; --c6: #9085e9; --c7: #e66767; --c8: #898781; --c9: #5f5e5a;
+  --map-gap: #3a3a37; --map-dim: #2a2a28;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 var(--step-0)/1.6 var(--body);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent-ink); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.08; text-wrap: balance; margin: 0; letter-spacing: -0.015em; }
+p { margin: 0; }
+.wrap {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.eyebrow {
+  font: 600 0.78rem/1 var(--body);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent-ink);
+}
+
+/* Top bar */
+.topbar { border-bottom: 1px solid var(--line); background: var(--surface); }
+.topbar .wrap { display: flex; align-items: center; gap: 24px; padding-block: 14px; }
+.brand { display: flex; align-items: center; gap: 10px; font: 700 1.05rem/1 var(--display); color: var(--ink); text-decoration: none; }
+.logo { width: 26px; height: 26px; display: grid; grid-template-columns: 56fr 44fr; grid-template-rows: 56fr 44fr; gap: 2px; }
+.logo span { border-radius: 2px; }
+.logo span:nth-child(1) { grid-row: 1 / 3; background: var(--c0); }
+.logo span:nth-child(2) { background: var(--c1); }
+.logo span:nth-child(3) { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: transparent; }
+.logo span:nth-child(3)::before { content: ""; background: var(--c2); border-radius: 2px; }
+.logo span:nth-child(3)::after { content: ""; background: var(--c3); border-radius: 2px; }
+.topnav { display: flex; gap: 22px; margin-left: auto; flex-wrap: wrap; }
+.topnav a { color: var(--ink-2); text-decoration: none; font-size: var(--step--1); font-weight: 500; }
+.topnav a:hover { color: var(--ink); }
+@media (max-width: 720px) { .topnav { display: none; } }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  font: 600 0.98rem/1 var(--body);
+  padding: 14px 20px; border-radius: 8px; text-decoration: none; cursor: pointer;
+  border: 1px solid transparent;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-ghost { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.btn-ghost:hover { border-color: var(--ink-3); }
+.btn svg { width: 18px; height: 18px; flex: none; }
+
+/* Hero */
+.hero { padding-block: clamp(40px, 7vw, 84px) 28px; }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 40px 56px; align-items: end; }
+@media (max-width: 900px) { .hero-grid { grid-template-columns: 1fr; } }
+.hero h1 { font-size: var(--step-3); font-weight: 800; margin-top: 18px; }
+.hero h1 em { font-style: normal; color: var(--accent); }
+.hero .lede { font-size: var(--step-1); color: var(--ink-2); line-height: 1.5; max-width: 34em; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 26px; }
+.facts { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; border-left: 2px solid var(--line); padding-left: 22px; }
+.facts li { display: grid; gap: 2px; }
+.facts strong { font: 700 1.55rem/1.1 var(--display); }
+.facts span { color: var(--ink-3); font-size: var(--step--1); }
+
+/* The window around the treemap */
+.window {
+  margin-top: 44px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgb(15 25 40 / 0.06), 0 18px 48px -24px rgb(15 25 40 / 0.35);
+}
+.titlebar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: var(--step--1); color: var(--ink-2); }
+.titlebar .controls { margin-left: auto; display: flex; gap: 18px; color: var(--ink-3); font-family: var(--mono); font-size: 0.8rem; }
+.titlebar .path { font-family: var(--mono); color: var(--ink); }
+.map-box { position: relative; height: clamp(300px, 42vw, 470px); }
+#map { display: block; width: 100%; height: 100%; cursor: crosshair; }
+.tip {
+  position: absolute; pointer-events: none; z-index: 2;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 10px; font-size: 0.82rem; line-height: 1.4; max-width: 300px;
+  box-shadow: 0 8px 24px -12px rgb(0 0 0 / 0.4);
+}
+.tip b { font-family: var(--mono); font-weight: 600; }
+.tip .muted { color: var(--ink-3); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); align-items: center; }
+.legend .hint { color: var(--ink-3); font-size: 0.82rem; margin-right: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: 500 0.84rem/1 var(--body); color: var(--ink);
+  background: var(--surface-2); border: 1px solid transparent; border-radius: 999px; padding: 7px 12px; cursor: pointer;
+}
+.chip i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.chip .num { color: var(--ink-3); font-size: 0.78rem; }
+.chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-tint); }
+.chip.off { opacity: 0.45; }
+.example-note { color: var(--ink-3); font-size: 0.8rem; margin-top: 10px; }
+
+/* Bands */
+.band { padding-block: clamp(56px, 8vw, 96px); border-top: 1px solid var(--line); }
+.band.alt { background: var(--surface); }
+.band-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 56px; align-items: end; margin-bottom: 40px; }
+@media (max-width: 860px) { .band-head { grid-template-columns: 1fr; } }
+.band h2 { font-size: var(--step-2); font-weight: 800; margin-top: 12px; }
+.band-head p { color: var(--ink-2); max-width: 36em; }
+
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px 56px; align-items: start; }
+@media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+
+.points { display: grid; gap: 22px; }
+.point h3 { font-size: var(--step-1); font-weight: 700; }
+.point p { color: var(--ink-2); margin-top: 6px; max-width: 36em; }
+
+/* App-like panels used as illustrations */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.band.alt .panel { background: var(--bg); }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.panel-head h3 { font: 700 1rem/1.2 var(--body); }
+.panel-head .num { color: var(--ink-3); font-size: 0.82rem; }
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.rows li:last-child { border-bottom: 0; }
+.rows .ico { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; background: var(--accent-tint); }
+.rows .ico svg { width: 15px; height: 15px; color: var(--accent-ink); }
+.rows .what { min-width: 0; }
+.rows .what strong { display: block; font-weight: 600; font-size: 0.95rem; }
+.rows .what span { display: block; color: var(--ink-3); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rows .size { font-family: var(--mono); font-size: 0.92rem; font-weight: 600; }
+.panel-foot { padding: 12px 18px; color: var(--ink-3); font-size: 0.8rem; border-top: 1px solid var(--line); }
+
+/* Shrink illustration */
+.shrink { padding: 20px 18px 22px; display: grid; gap: 18px; }
+.bar-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 76px; gap: 12px; align-items: center; font-size: 0.86rem; }
+.bar-row .label { color: var(--ink-2); }
+.bar-row .num { text-align: right; font-weight: 600; }
+.track { height: 14px; border-radius: 4px; background: var(--surface-2); position: relative; overflow: hidden; }
+.track .used { position: absolute; inset: 0 auto 0 0; background: var(--c3); border-radius: 4px; }
+.track .free { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: repeating-linear-gradient(135deg, var(--map-dim) 0 6px, transparent 6px 12px); border: 1px solid var(--line); }
+.shrink-steps { display: flex; flex-wrap: wrap; gap: 8px; }
+.step-tag { font-size: 0.8rem; padding: 5px 10px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); }
+
+/* Move illustration */
+.drives { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 28px; }
+@media (max-width: 760px) { .drives { grid-template-columns: 1fr; } }
+.drive { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; display: grid; gap: 6px; }
+.drive .top { display: flex; align-items: baseline; gap: 10px; }
+.drive .letter { font: 800 1.5rem/1 var(--display); }
+.drive .kind { color: var(--ink-3); font-size: 0.82rem; }
+.drive .role { font-weight: 600; font-size: 0.95rem; }
+.drive .for { color: var(--ink-2); font-size: 0.85rem; }
+.meter { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 4px; }
+.meter b { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.drive .free { font-size: 0.8rem; color: var(--ink-3); }
+
+.rules { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.rules th { text-align: left; font: 600 0.75rem/1 var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); padding: 0 12px 10px 0; }
+.rules td { padding: 12px 12px 12px 0; border-top: 1px solid var(--line); vertical-align: top; }
+.rules td:first-child { font-weight: 600; }
+.rules .to { white-space: nowrap; font-family: var(--mono); font-size: 0.85rem; color: var(--accent-ink); }
+.table-scroll { overflow-x: auto; }
+
+.move-card { padding: 18px; display: grid; gap: 12px; }
+.move-card .name { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.move-card .name strong { font-size: 1rem; }
+.move-card .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.move-card .why { color: var(--ink-2); font-size: 0.88rem; }
+.progress { display: grid; gap: 8px; padding: 14px; border-radius: 8px; background: var(--surface-2); }
+.progress .line { display: flex; justify-content: space-between; gap: 12px; font-size: 0.82rem; color: var(--ink-2); flex-wrap: wrap; }
+.progress .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.progress .bar b { display: block; height: 100%; width: 59%; background: var(--accent); }
+.ok { display: flex; align-items: center; gap: 8px; color: var(--good); font-size: 0.88rem; font-weight: 600; }
+.ok svg { width: 16px; height: 16px; flex: none; }
+
+/* Honest numbers */
+.honest { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px 40px; }
+@media (max-width: 860px) { .honest { grid-template-columns: 1fr; } }
+.honest div { border-top: 2px solid var(--ink); padding-top: 14px; }
+.honest h3 { font: 700 1.05rem/1.3 var(--body); }
+.honest p { color: var(--ink-2); font-size: 0.94rem; margin-top: 6px; }
+
+/* Terminal */
+.term { background: var(--code-bg); color: var(--code-ink); border-radius: var(--radius); overflow-x: auto; }
+.term pre { margin: 0; padding: 20px 22px; font: 400 0.82rem/1.6 var(--mono); }
+.term .dim { color: var(--code-dim); }
+.term .p { color: #86b6ef; }
+
+/* Get it */
+.get { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 32px 56px; align-items: center; }
+@media (max-width: 860px) { .get { grid-template-columns: 1fr; } }
+.get h2 { font-size: var(--step-2); font-weight: 800; }
+.get p { color: var(--ink-2); margin-top: 12px; max-width: 34em; }
+.cmd { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 14px 16px; font: 0.82rem/1.4 var(--mono); }
+.cmd button { border: 0; border-left: 1px solid var(--line); background: var(--surface-2); color: var(--ink); font: 600 0.85rem/1 var(--body); padding: 0 16px; cursor: pointer; }
+.reqs { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 8px; color: var(--ink-2); font-size: 0.92rem; }
+.reqs li { display: flex; gap: 10px; }
+.reqs svg { width: 18px; height: 18px; color: var(--good); flex: none; margin-top: 3px; }
+
+footer { border-top: 1px solid var(--line); padding-block: 28px; color: var(--ink-3); font-size: 0.85rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 24px; justify-content: space-between; }
+
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (prefers-reduced-motion: no-preference) {
+  .chip, .btn { transition: background-color .15s, border-color .15s, opacity .15s, filter .15s; }
+}
+</style>
+
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="#top"><span class="logo" aria-hidden="true"><span></span><span></span><span></span></span>Disk Space Analyzer</a>
+    <nav class="topnav" aria-label="Sections">
+      <a href="#see">See</a>
+      <a href="#clean">Clean</a>
+      <a href="#shrink">Shrink</a>
+      <a href="#move">Move</a>
+      <a href="#get">Get it</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-grid">
+        <div>
+          <p class="eyebrow">Free for Windows 10 and 11</p>
+          <h1>See what fills your drive. <em>Then free it up.</em></h1>
+          <p class="lede" style="margin-top:20px">Disk Space Analyzer maps every file on a drive in seconds, then tells you what you can clean, shrink or move to another drive, and why. Before a move removes anything, it checks the copy byte for byte.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="https://github.com/Jaspreet84/disk-space-analyzer" target="_blank" rel="noopener">
+              <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.72 1.22 1.88.87 2.34.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 8 0Z"/></svg>
+              Get it on GitHub
+            </a>
+            <a class="btn btn-ghost" href="#get">Build it yourself</a>
+          </div>
+        </div>
+        <ul class="facts" aria-label="At a glance">
+          <li><strong class="num">330 KB</strong><span>One .exe. Nothing to install, no runtime to download.</span></li>
+          <li><strong class="num">~40 s</strong><span>to scan 697,000 files on a 238 GB laptop SSD.</span></li>
+          <li><strong class="num">0 bytes</strong><span>removed until you confirm, and never before a copy checks out.</span></li>
+        </ul>
+      </div>
+
+      <figure class="window" style="margin-inline:0;margin-bottom:0">
+        <div class="titlebar" aria-hidden="true">
+          <span class="logo" style="width:16px;height:16px;gap:1px"><span></span><span></span><span></span></span>
+          <span>Treemap of <span class="path">C:\</span></span>
+          <span class="num" id="map-total">· 210 GB</span>
+          <span class="controls"><span>—</span><span>☐</span><span>✕</span></span>
+        </div>
+        <div class="map-box">
+          <canvas id="map" role="img" aria-label="Example treemap of a Windows system drive. Each rectangle is a file, sized by the space it takes and colored by type. The biggest are a Docker disk, a WSL Linux disk, Windows installer images and the page file."></canvas>
+          <div class="tip" id="tip" hidden></div>
+        </div>
+        <div class="legend" id="legend"><span class="hint">Highlight a type:</span></div>
+      </figure>
+      <p class="example-note">An example drive. Hover a rectangle to see the file; the app shows your own files the same way.</p>
+    </div>
+  </section>
+
+  <section class="band alt" id="see">
+    <div class="wrap">
+      <div class="band-head">
+        <div>
+          <p class="eyebrow">See</p>
+          <h2>Every file, sized by the space it takes</h2>
+        </div>
+        <p>The treemap shows a whole drive at once. Big rectangles are big files, colors are file types, and folders group the files they hold. Click one to find it in the folder list; double-click to zoom in.</p>
+      </div>
+      <div class="split">
+        <div class="points">
+          <div class="point">
+            <h3>Explore folders</h3>
+            <p>Walk down from the drive to the folder that matters, with each item's share of its parent and the date of its newest change.</p>
+          </div>
+          <div class="point">
+            <h3>Largest files</h3>
+            <p>The 1,000 biggest files on the drive, filterable by type and searchable by name.</p>
+          </div>
+          <div class="point">
+            <h3>Fast on big drives</h3>
+            <p>It reads folders in parallel with the same Windows calls Explorer uses, so a full system drive takes well under a minute.</p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Largest files</h3><span class="num">example</span></div>
+          <ul class="rows">
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 6h6M5 9h4"/></svg></span><span class="what"><strong>docker_data.vhdx</strong><span>C:\Users\alex\AppData\Local\Docker\wsl\disk</span></span><span class="size">35.1 GB</span></li>
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3"/></svg></span><span class="what"><strong>ext4.vhdx</strong><span>C:\Users\alex\AppData\Local\Packages\…Ubuntu…\LocalState</span></span><span class="size">20.5 GB</span></li>
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="1.6"/></svg></span><span class="what"><strong>Win11_24H2_English_x64.iso</strong><span>C:\Users\alex\Downloads</span></span><span class="size">8.43 GB</span></li>
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2.5h6l4 4v7H3z"/><path d="M9 2.5v4h4"/></svg></span><span class="what"><strong>pagefile.sys</strong><span>C:\</span></span><span class="size">7.11 GB</span></li>
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="m7 6.5 3 1.5-3 1.5z"/></svg></span><span class="what"><strong>holiday-2025.mp4</strong><span>C:\Users\alex\Videos</span></span><span class="size">4.20 GB</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="clean">
+    <div class="wrap">
+      <div class="band-head">
+        <div>
+          <p class="eyebrow">Clean</p>
+          <h2>Suggestions you can check before you act</h2>
+        </div>
+        <p>After each scan, Clean up lists the space that is usually safe to reclaim, largest first, with the files behind each suggestion. Anything you remove goes to the Recycle Bin.</p>
+      </div>
+      <div class="split">
+        <div class="panel">
+          <div class="panel-head"><h3>Worth a look</h3><span class="num">example · 73.4 GB</span></div>
+          <ul class="rows">
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3"/></svg></span><span class="what"><strong>WSL and Docker disks</strong><span>Grow but never shrink by themselves</span></span><span class="size">55.6 GB</span></li>
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="1.6"/></svg></span><span class="what"><strong>Installer disk images</strong><span>Download them again if you need them</span></span><span class="size">13.3 GB</span></li>
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 5h10v8H3zM5 5V3h6v2"/></svg></span><span class="what"><strong>Developer caches</strong><span>npm, pip, NuGet, Gradle, Cargo and others</span></span><span class="size">3.10 GB</span></li>
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2v8m-3-3 3 3 3-3M3 13h10"/></svg></span><span class="what"><strong>Old installers in Downloads</strong><span>Setup files and archives older than a month</span></span><span class="size">1.24 GB</span></li>
+            <li><span class="ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 4h10M6 4V2.5h4V4M4.5 4l.7 9.5h5.6l.7-9.5"/></svg></span><span class="what"><strong>Temporary files and crash reports</strong><span>Opens Windows Disk Cleanup</span></span><span class="size">0.18 GB</span></li>
+          </ul>
+        </div>
+        <div class="points">
+          <div class="point">
+            <h3>Knows what developers leave behind</h3>
+            <p>Package caches, Docker images, Linux disks and installer images are where a developer laptop's space usually goes. Each one is named, sized and explained.</p>
+          </div>
+          <div class="point">
+            <h3>Nothing disappears by surprise</h3>
+            <p>Every removal asks first and goes to the Recycle Bin. For system leftovers, it opens the Windows tool that handles them.</p>
+          </div>
+          <div class="point">
+            <h3>Counts what it can't see</h3>
+            <p>Space used by protected system folders and restore points shows up as its own item, so the drive's numbers always add up.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band alt" id="shrink">
+    <div class="wrap">
+      <div class="band-head">
+        <div>
+          <p class="eyebrow">Shrink</p>
+          <h2>Get back the space WSL and Docker keep</h2>
+        </div>
+        <p>WSL and Docker store each Linux system in one virtual disk file. The file grows as Linux needs space but never shrinks when you delete things. Disk Space Analyzer shows how much of each file is really in use, cleans caches inside it, and compacts the file.</p>
+      </div>
+      <div class="split">
+        <div class="panel">
+          <div class="panel-head"><h3>Ubuntu (WSL)</h3><span class="num">a real result</span></div>
+          <div class="shrink">
+            <div class="bar-row">
+              <span class="label">Before</span>
+              <span class="track" aria-hidden="true"><span class="free" style="width:100%"></span><span class="used" style="width:66.9%"></span></span>
+              <span class="num">35.9 GB</span>
+            </div>
+            <div class="bar-row">
+              <span class="label">After</span>
+              <span class="track" aria-hidden="true"><span class="used" style="width:57.1%"></span></span>
+              <span class="num">20.5 GB</span>
+            </div>
+            <p style="color:var(--ink-2);font-size:0.88rem">The disk file held 24 GB of data and 12 GB of space freed long ago. Clearing old package caches and compacting the file gave 15.4 GB back to Windows.</p>
+            <div class="shrink-steps">
+              <span class="step-tag">Clean caches</span>
+              <span class="step-tag">Clean up Docker</span>
+              <span class="step-tag">Shrink</span>
+            </div>
+          </div>
+        </div>
+        <div class="points">
+          <div class="point">
+            <h3>Clean caches inside Linux</h3>
+            <p>Clears pnpm packages no project uses, the npm, yarn and pip caches, the Go module cache and apt downloads. Your projects keep working.</p>
+          </div>
+          <div class="point">
+            <h3>Clean up Docker</h3>
+            <p>Runs <code class="num">docker system prune</code> for you. Unused images are optional, and volumes stay unless you say otherwise.</p>
+          </div>
+          <div class="point">
+            <h3>Shrink in one step</h3>
+            <p>Marks free space inside Linux, shuts WSL down and compacts the file. Windows asks for administrator rights once.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="move">
+    <div class="wrap">
+      <div class="band-head">
+        <div>
+          <p class="eyebrow">Move</p>
+          <h2>Put each thing on the drive it belongs on</h2>
+        </div>
+        <p>Disk Space Analyzer learns what each of your drives is: the fast system drive, an internal drive that is always there, or an external one. Then it suggests what to move, based on what each item is and when it last changed.</p>
+      </div>
+
+      <div class="drives" aria-label="Example drives">
+        <div class="drive">
+          <div class="top"><span class="letter">C:</span><span class="kind">System SSD</span></div>
+          <span class="role">For Windows and apps</span>
+          <span class="for">And the work you're doing now.</span>
+          <span class="meter"><b style="width:62%"></b></span>
+          <span class="free num">90.7 GB free of 238 GB</span>
+        </div>
+        <div class="drive">
+          <div class="top"><span class="letter">D:</span><span class="kind">Internal hard drive</span></div>
+          <span class="role">For data that must stay available</span>
+          <span class="for">Downloads, Docker, virtual machines.</span>
+          <span class="meter"><b style="width:73%"></b></span>
+          <span class="free num">123 GB free of 466 GB</span>
+        </div>
+        <div class="drive">
+          <div class="top"><span class="letter">F:</span><span class="kind">External USB drive</span></div>
+          <span class="role">For backups and archives</span>
+          <span class="for">Things you rarely open.</span>
+          <span class="meter"><b style="width:7%"></b></span>
+          <span class="free num">4.24 TB free of 4.55 TB</span>
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="table-scroll">
+          <table class="rules">
+            <thead><tr><th>What it finds</th><th>Where it suggests</th><th>Why</th></tr></thead>
+            <tbody>
+              <tr><td>Backups, photos and videos</td><td class="to">copy to F:</td><td>Two copies on two drives. One failed drive can't lose them.</td></tr>
+              <tr><td>Installer images and old archives</td><td class="to">move to F:</td><td>Needed rarely, and can be downloaded again.</td></tr>
+              <tr><td>Downloads and other big personal folders</td><td class="to">move to D:</td><td>Windows moves the folder and keeps it in File Explorer.</td></tr>
+              <tr><td>WSL, Docker and virtual machines</td><td class="to">move to D:</td><td>They need an always-connected NTFS drive, never a USB one.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <div class="move-card">
+            <div class="name"><strong>Phone backup 2025</strong><span class="num" style="font-weight:600">64.4 GB</span></div>
+            <div class="tags"><span class="step-tag">Backup</span><span class="step-tag">Last changed July 2026</span></div>
+            <p class="why">Copying this backup to F: gives you a second copy on a separate drive. Keep the original too.</p>
+            <div class="progress" aria-label="Example progress">
+              <div class="line"><strong style="color:var(--ink)">Copying to F: · step 2 of 2, checking the copy</strong></div>
+              <div class="bar"><b></b></div>
+              <div class="line num"><span>38.0 of 64.4 GB · 6,312 of 10,698 files</span><span>34 MB/s · about 13 min left</span></div>
+            </div>
+            <p class="ok"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 8.5 3 3 7-7"/></svg>Every file is compared with the original, straight from the disk.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band alt" id="honest">
+    <div class="wrap">
+      <div class="band-head">
+        <div>
+          <p class="eyebrow">Accurate</p>
+          <h2>Numbers you can trust</h2>
+        </div>
+        <p>Disk analyzers often count some space twice or miss it entirely. Disk Space Analyzer handles the cases that trip others up.</p>
+      </div>
+      <div class="honest">
+        <div><h3>Nothing counted twice</h3><p>Junctions and symbolic links aren't followed, and folders that packaged apps like Claude redirect are counted once.</p></div>
+        <div><h3>Cloud files count as zero</h3><p>OneDrive files that are online-only take no space on your PC, so they aren't added to the total. Their size is shown separately.</p></div>
+        <div><h3>Real size on disk</h3><p>Compressed and sparse files count the space they actually use, not the size they report.</p></div>
+        <div><h3>Long paths work</h3><p>Folders nested deeper than Windows' old 260-character limit are scanned, copied and checked like any other.</p></div>
+        <div><h3>Moves you can resume</h3><p>Stop a copy at any point. Starting again skips the files that are already done, and any file that doesn't match is copied again.</p></div>
+        <div><h3>Light and dark</h3><p>Follows your Windows theme and accent color, or set it yourself.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="cli">
+    <div class="wrap">
+      <div class="band-head">
+        <div>
+          <p class="eyebrow">Command line</p>
+          <h2>The same answers in a terminal</h2>
+        </div>
+        <p><code class="num">dsa.exe</code> prints the largest folders, files and types, writes every folder to a CSV for Excel, and lists move suggestions with <code class="num">--moves</code>.</p>
+      </div>
+      <div class="term" tabindex="0" aria-label="Example command-line output">
+<pre><span class="p">&gt;</span> dsa D: --moves
+<span class="dim">Drives</span>
+  C:             System SSD          NTFS   90.7 GB free of 238 GB
+  D: Storage     Internal hard drive NTFS    123 GB free of 466 GB
+  F: One Touch   External drive      NTFS   4.24 TB free of 4.55 TB
+
+<span class="dim">Better on another drive</span>
+     64.4 GB  D:\phone-backup-2025  [Backup]
+              copy to F:\phone-backup-2025  (Last changed July 2026)
+              Copying this backup to F: gives you a second copy on a separate drive.
+
+     8.43 GB  D:\Downloads\Win11_24H2_English_x64.iso  [Installer image]
+              move to F:\Disk images\Win11_24H2_English_x64.iso  (Last changed March 2026)
+              Installer images are only needed now and then, and can be downloaded again.</pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="band alt" id="get">
+    <div class="wrap get">
+      <div>
+        <p class="eyebrow">Get it</p>
+        <h2 style="margin-top:12px">Free, small, and built from source in seconds</h2>
+        <p>The build uses the C# compiler that already ships with Windows, so there's no SDK to install. Clone the repository and run one command; both programs land in <code class="num">bin\</code>.</p>
+        <ul class="reqs">
+          <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 8.5 3 3 7-7"/></svg>Windows 10 or 11, with the .NET Framework 4.8 that comes with it</li>
+          <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 8.5 3 3 7-7"/></svg>No administrator rights, except to shrink a virtual disk</li>
+          <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 8.5 3 3 7-7"/></svg>Reads and copies files with Windows' own calls; nothing runs in the background</li>
+        </ul>
+      </div>
+      <div style="display:grid;gap:14px;min-width:0">
+        <div class="cmd">
+          <code id="build-cmd">powershell -ExecutionPolicy Bypass -File build.ps1</code>
+          <button type="button" id="copy-btn">Copy</button>
+        </div>
+        <a class="btn btn-primary" style="justify-self:start" href="https://github.com/Jaspreet84/disk-space-analyzer" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.72 1.22 1.88.87 2.34.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 8 0Z"/></svg>
+          View the source on GitHub
+        </a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Disk Space Analyzer · made for Windows 10 and 11</span>
+    <span>Built with the C# compiler that ships with Windows</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  var GB = 1;  // sizes below are in GB
+  var CATS = ["Video", "Images", "Audio", "Archives & disk images", "Documents", "Code & data", "Programs & libraries", "System, logs & temp", "Other", "Unaccounted"];
+
+  // A seeded random generator, so the example drive looks the same on every visit.
+  var seed = 7;
+  function rnd() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+
+  function file(name, size, cat) { return { name: name, size: size, cat: cat }; }
+  function dir(name, kids) { return { name: name, kids: kids }; }
+  function many(prefix, ext, count, min, max, cat) {
+    var out = [];
+    for (var i = 0; i < count; i++) out.push(file(prefix + (i + 1) + ext, min + rnd() * rnd() * (max - min), cat));
+    return out;
+  }
+
+  var drive = dir("C:\\", [
+    dir("Users", [dir("alex", [
+      dir("AppData", [
+        dir("Local", [
+          dir("Docker", [dir("wsl", [dir("disk", [file("docker_data.vhdx", 35.1, 3)])])]),
+          dir("Packages", [
+            dir("CanonicalGroupLimited.Ubuntu", [dir("LocalState", [file("ext4.vhdx", 20.5, 3)])]),
+            dir("Microsoft.WindowsTerminal", many("state", ".dat", 20, 0.002, 0.03, 8))
+          ]),
+          dir("Google", [dir("Chrome", many("cache_", "", 90, 0.005, 0.06, 8))]),
+          dir("npm-cache", many("pkg-", ".tgz", 120, 0.002, 0.03, 3)),
+          dir("Programs", many("app", ".dll", 60, 0.01, 0.12, 6))
+        ]),
+        dir("Roaming", many("profile", ".db", 40, 0.005, 0.05, 5))
+      ]),
+      dir("Downloads", [
+        file("Win11_24H2_English_x64.iso", 8.43, 3),
+        file("ubuntu-24.04-desktop-amd64.iso", 5.9, 3),
+        file("VSCodeSetup-x64.exe", 0.1, 6),
+        file("DockerDesktopInstaller.exe", 0.62, 6),
+        file("photos-export.zip", 1.4, 3)
+      ].concat(many("invoice-", ".pdf", 30, 0.0005, 0.004, 4))),
+      dir("Videos", [file("holiday-2025.mp4", 4.2, 0), file("wedding-highlights.mp4", 2.9, 0), file("screen-recording.mp4", 1.1, 0)].concat(many("clip", ".mp4", 14, 0.08, 0.6, 0))),
+      dir("Pictures", many("IMG_", ".jpg", 380, 0.002, 0.009, 1).concat(many("RAW_", ".dng", 40, 0.02, 0.04, 1))),
+      dir("Music", many("track", ".mp3", 120, 0.004, 0.012, 2)),
+      dir("Documents", many("report", ".docx", 60, 0.0003, 0.004, 4).concat(many("notes", ".pdf", 50, 0.0005, 0.01, 4))),
+      dir("source", [
+        dir("web-app", [dir("node_modules", many("module", ".js", 300, 0.0003, 0.004, 5)), file("pack-4f2a.pack", 0.42, 5)]),
+        dir("api", many("main", ".go", 80, 0.0001, 0.003, 5).concat([file("api.exe", 0.06, 6)]))
+      ])
+    ])]),
+    dir("Windows", [
+      dir("WinSxS", many("component", ".dll", 260, 0.008, 0.06, 6)),
+      dir("System32", many("sys", ".dll", 200, 0.004, 0.05, 6).concat(many("driver", ".sys", 40, 0.001, 0.02, 6))),
+      dir("Installer", many("patch", ".msi", 24, 0.02, 0.2, 6)),
+      dir("Logs", many("cbs", ".log", 30, 0.002, 0.03, 7))
+    ]),
+    dir("Program Files", [
+      dir("Microsoft Office", many("office", ".dll", 70, 0.01, 0.1, 6)),
+      dir("Docker", [file("docker-desktop.iso", 0.72, 3)].concat(many("docker", ".exe", 12, 0.05, 0.25, 6))),
+      dir("Mozilla Firefox", many("xul", ".dll", 20, 0.01, 0.12, 6))
+    ]),
+    dir("Program Files (x86)", [dir("Microsoft", [dir("Edge", many("msedge", ".dll", 30, 0.04, 0.33, 6)), dir("EdgeWebView", many("msedgewebview", ".dll", 24, 0.04, 0.33, 6))])]),
+    dir("ProgramData", [dir("Package Cache", many("bundle", ".cab", 20, 0.01, 0.06, 3))]),
+    file("pagefile.sys", 7.11, 7),
+    file("<Space the scan couldn't see>", 10.3, 9)
+  ]);
+
+  function total(n) {
+    if (!n.kids) return n.size;
+    var s = 0;
+    for (var i = 0; i < n.kids.length; i++) { n.kids[i].parent = n; s += total(n.kids[i]); }
+    n.kids.sort(function (a, b) { return b.size - a.size; });
+    return (n.size = s);
+  }
+  total(drive);
+  var catBytes = new Array(CATS.length).fill(0);
+  (function sum(n) { if (n.kids) n.kids.forEach(sum); else catBytes[n.cat] += n.size; })(drive);
+
+  function fmt(gb) {
+    if (gb >= 100) return Math.round(gb) + " GB";
+    if (gb >= 10) return gb.toFixed(1) + " GB";
+    if (gb >= 1) return gb.toFixed(2) + " GB";
+    var mb = gb * 1024;
+    return (mb >= 100 ? Math.round(mb) : mb.toFixed(1)) + " MB";
+  }
+  function pathOf(n) {
+    var parts = [];
+    for (var p = n.parent; p; p = p.parent) parts.unshift(p.name);
+    return parts.join("\\").replace("C:\\\\", "C:\\");
+  }
+  document.getElementById("map-total").textContent = "· " + fmt(drive.size);
+
+  var canvas = document.getElementById("map"), tip = document.getElementById("tip"), box = canvas.parentNode;
+  var cells = [], highlight = -1, colors = [];
+
+  function readColors() {
+    var cs = getComputedStyle(document.documentElement);
+    colors = [];
+    for (var i = 0; i < 10; i++) colors.push(hex(cs.getPropertyValue("--c" + i)));
+    colors.gap = hex(cs.getPropertyValue("--map-gap"));
+    colors.dim = hex(cs.getPropertyValue("--map-dim"));
+  }
+  function hex(v) {
+    v = v.trim().replace("#", "");
+    return [parseInt(v.substr(0, 2), 16), parseInt(v.substr(2, 2), 16), parseInt(v.substr(4, 2), 16)];
+  }
+
+  // Squarified layout with cushion shading, as in the app.
+  var L = [-0.0995, -0.0995, 0.995], AMBIENT = 0.4, BRIGHT = 1.12;
+  function render() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var w = Math.max(1, Math.round(box.clientWidth * dpr)), h = Math.max(1, Math.round(box.clientHeight * dpr));
+    canvas.width = w; canvas.height = h;
+    var ctx = canvas.getContext("2d");
+    var img = ctx.createImageData(w, h), px = img.data;
+    cells = [];
+    place(drive, 0, 0, w, h, [0, 0, 0, 0], 0.4, px, w, h, dpr);
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function place(n, x, y, w, h, s, height, px, pw, ph, dpr) {
+    var x0 = Math.round(x), x1 = Math.round(x + w), y0 = Math.round(y), y1 = Math.round(y + h);
+    if (x1 <= x0 || y1 <= y0) return;
+    var leaf = !n.kids;
+    var r = leaf ? Math.max(height, 0.3) : height;
+    s = [s[0] + 4 * r * (x + x + w) / w, s[1] - 4 * r / w, s[2] + 4 * r * (y + y + h) / h, s[3] - 4 * r / h];
+    if (leaf) {
+      if (w * h >= 4) cells.push({ n: n, x: x / dpr, y: y / dpr, w: w / dpr, h: h / dpr });
+      var c = (highlight >= 0 && n.cat !== highlight) ? colors.dim : colors[n.cat];
+      shade(px, pw, x0, x1, y0, y1, s, c);
+      return;
+    }
+    fill(px, pw, x0, x1, y0, y1, highlight >= 0 ? colors.dim : colors.gap);
+    layout(n.kids, x, y, w, h, s, height * 0.8, px, pw, ph, dpr);
+  }
+
+  function layout(kids, x, y, w, h, s, height, px, pw, ph, dpr) {
+    var n = kids.length, remaining = 0, i = 0;
+    for (var k = 0; k < n; k++) remaining += kids[k].size;
+    while (i < n && w > 0 && h > 0 && remaining > 0) {
+      var scale = w * h / remaining, wide = w >= h, side = wide ? h : w, j = i, row = 0, worst = Infinity;
+      while (j < n) {
+        var next = row + kids[j].size, thick = next * scale / side;
+        var big = kids[i].size * scale / thick, small = kids[j].size * scale / thick;
+        var ratio = Math.max(thick / big, big / thick, thick / small, small / thick);
+        if (ratio > worst) break;
+        worst = ratio; row = next; j++;
+      }
+      var thickness = j === n ? (wide ? w : h) : row * scale / side, pos = wide ? y : x, end = wide ? y + h : x + w;
+      for (var m = i; m < j; m++) {
+        var len = m === j - 1 ? end - pos : side * kids[m].size / row;
+        if (wide) place(kids[m], x, pos, thickness, len, s, height, px, pw, ph, dpr);
+        else place(kids[m], pos, y, len, thickness, s, height, px, pw, ph, dpr);
+        pos += len;
+      }
+      if (wide) { x += thickness; w -= thickness; } else { y += thickness; h -= thickness; }
+      remaining -= row; i = j;
+    }
+  }
+
+  function fill(px, pw, x0, x1, y0, y1, c) {
+    for (var py = y0; py < y1; py++) for (var p = (py * pw + x0) * 4, e = (py * pw + x1) * 4; p < e; p += 4) {
+      px[p] = c[0]; px[p + 1] = c[1]; px[p + 2] = c[2]; px[p + 3] = 255;
+    }
+  }
+  function shade(px, pw, x0, x1, y0, y1, s, c) {
+    for (var py = y0; py < y1; py++) {
+      var ny = -(2 * s[3] * (py + 0.5) + s[2]);
+      for (var qx = x0, p = (py * pw + x0) * 4; qx < x1; qx++, p += 4) {
+        var nx = -(2 * s[1] * (qx + 0.5) + s[0]);
+        var cos = (nx * L[0] + ny * L[1] + L[2]) / Math.sqrt(nx * nx + ny * ny + 1);
+        var light = (AMBIENT + (1 - AMBIENT) * Math.max(0, cos)) * BRIGHT;
+        px[p] = Math.min(255, c[0] * light); px[p + 1] = Math.min(255, c[1] * light); px[p + 2] = Math.min(255, c[2] * light); px[p + 3] = 255;
+      }
+    }
+  }
+
+  // Hover: show the file under the pointer.
+  canvas.addEventListener("pointermove", function (e) {
+    var r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, hit = null;
+    for (var i = cells.length - 1; i >= 0; i--) {
+      var c = cells[i];
+      if (x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h) { hit = c.n; break; }
+    }
+    if (!hit) { tip.hidden = true; return; }
+    tip.innerHTML = "";
+    var name = document.createElement("div"); name.textContent = hit.name; name.style.fontWeight = "600";
+    var size = document.createElement("div"); size.innerHTML = "<b></b> <span class='muted'></span>";
+    size.firstChild.textContent = fmt(hit.size); size.lastChild.textContent = CATS[hit.cat];
+    var where = document.createElement("div"); where.className = "muted"; where.textContent = pathOf(hit);
+    tip.appendChild(name); tip.appendChild(size); tip.appendChild(where);
+    tip.hidden = false;
+    var left = Math.min(x + 14, r.width - tip.offsetWidth - 8), top = y + 18;
+    if (top + tip.offsetHeight > r.height - 4) top = y - tip.offsetHeight - 12;
+    tip.style.left = Math.max(4, left) + "px"; tip.style.top = Math.max(4, top) + "px";
+  });
+  canvas.addEventListener("pointerleave", function () { tip.hidden = true; });
+
+  // Legend: the categories on this drive, in their fixed order. Clicking one highlights it, as in the app.
+  var legend = document.getElementById("legend"), chips = [];
+  CATS.forEach(function (name, i) {
+    if (catBytes[i] <= 0) return;
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.setAttribute("aria-pressed", "false");
+    var sw = document.createElement("i"); sw.style.background = "var(--c" + i + ")";
+    var label = document.createElement("span"); label.textContent = name;
+    var size = document.createElement("span"); size.className = "num"; size.textContent = fmt(catBytes[i]);
+    b.appendChild(sw); b.appendChild(label); b.appendChild(size);
+    b.addEventListener("click", function () {
+      highlight = highlight === i ? -1 : i;
+      chips.forEach(function (c) {
+        c.el.setAttribute("aria-pressed", String(c.i === highlight));
+        c.el.classList.toggle("off", highlight >= 0 && c.i !== highlight);
+      });
+      render();
+    });
+    chips.push({ el: b, i: i });
+    legend.appendChild(b);
+  });
+
+  var pending = 0;
+  function rerender() { cancelAnimationFrame(pending); pending = requestAnimationFrame(function () { readColors(); render(); }); }
+  if (window.ResizeObserver) new ResizeObserver(rerender).observe(box); else window.addEventListener("resize", rerender);
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", rerender);
+  }
+  new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  readColors();
+  render();
+
+  // Copy the build command.
+  var copyBtn = document.getElementById("copy-btn"), cmd = document.getElementById("build-cmd");
+  copyBtn.addEventListener("click", function () {
+    var done = function () { copyBtn.textContent = "Copied"; setTimeout(function () { copyBtn.textContent = "Copy"; }, 1600); };
+    var select = function () { var range = document.createRange(); range.selectNodeContents(cmd); var sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); copyBtn.textContent = "Press Ctrl+C"; };
+    try {
+      navigator.clipboard.writeText(cmd.textContent).then(done, select);
+    } catch (e) { select(); }
+  });
+})();
+</script>
+
+</body>
+</html>

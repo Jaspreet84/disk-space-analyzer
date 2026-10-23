@@ -2,7 +2,7 @@
 
 A Windows tool that shows what is using space on a drive or in a folder, and helps you get it back. It uses the Windows 11 (Fluent) look, with light and dark themes. It is a single `.exe` with no installer and no dependencies. It uses the .NET Framework 4.8 that comes with Windows 10 and 11.
 
-**[See the product page](https://claude.ai/artifact/E5GdXQSaVSH4z8bJR7z1TW)** for a tour of what it does.
+**[See the product page](https://jaspreet84.github.io/disk-space-analyzer/)** for a tour of what it does. Its source is `docs/index.html`, published with GitHub Pages.
 
 There are two programs:
 
