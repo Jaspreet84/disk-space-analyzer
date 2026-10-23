@@ -63,6 +63,9 @@
         <RadioButton x:Name="NavMove" GroupName="Nav" Style="{StaticResource NavItem}" IsEnabled="False">
           <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8DE;"/><TextBlock Text="Move" Margin="14,0,0,0"/></StackPanel>
         </RadioButton>
+        <RadioButton x:Name="NavProtect" GroupName="Nav" Style="{StaticResource NavItem}">
+          <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE72E;"/><TextBlock Text="Protect" Margin="14,0,0,0"/></StackPanel>
+        </RadioButton>
         <RadioButton x:Name="NavDisks" GroupName="Nav" Style="{StaticResource NavItem}">
           <StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xEDA2;"/><TextBlock Text="Virtual disks" Margin="14,0,0,0"/></StackPanel>
         </RadioButton>
@@ -650,6 +653,17 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
+
+        <!-- PROTECT -->
+        <ScrollViewer x:Name="ProtectPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="40,32,40,32">
+            <TextBlock Style="{StaticResource Title}" Text="Protect"/>
+            <TextBlock Style="{StaticResource BodySecondary}" Margin="0,6,0,0" MaxWidth="760" HorizontalAlignment="Left"
+                       Text="Protect will show which files would hurt if they leaked and which would hurt if a drive died. This build has the ground rules; findings arrive in the next stage. Everything below is generated from the program itself, so it describes this build, not a plan."/>
+            <TextBlock Style="{StaticResource SectionHeader}" Margin="0,28,0,12" Text="What Protect reads"/>
+            <StackPanel x:Name="ProtectInfo"/>
           </StackPanel>
         </ScrollViewer>
 

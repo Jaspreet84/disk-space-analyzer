@@ -27,8 +27,8 @@ namespace DiskSpace
         readonly bool animate;
 
         Grid root, dialogLayer;
-        RadioButton navHome, navOverview, navExplore, navFiles, navCleanup, navMove, navDisks;
-        FrameworkElement homePage, scanPage, overviewPage, explorePage, filesPage, cleanupPage, movePage, disksPage, currentPage;
+        RadioButton navHome, navOverview, navExplore, navFiles, navCleanup, navMove, navProtect, navDisks;
+        FrameworkElement homePage, scanPage, overviewPage, explorePage, filesPage, cleanupPage, movePage, protectPage, disksPage, currentPage;
         Button maxButton, dialogPrimary, dialogSecondary;
         Button selOpen, selExplorer, selCopy, selRescan, selShrink, selRecycle;
         TextBlock themeIcon, themeLabel, scanContextPath, scanContextDetail, selName, selDetail, toastIcon, toastText, dialogTitle;
@@ -68,6 +68,7 @@ namespace DiskSpace
             WireFiles();
             WireCleanup();
             WireMove();
+            WireProtect();
             WireDisks();
             ShowPage(homePage);
             Window.Loaded += (s, e) => OnLoaded();
@@ -136,6 +137,7 @@ namespace DiskSpace
             navFiles = E<RadioButton>("NavFiles");
             navCleanup = E<RadioButton>("NavCleanup");
             navMove = E<RadioButton>("NavMove");
+            navProtect = E<RadioButton>("NavProtect");
             navDisks = E<RadioButton>("NavDisks");
             homePage = E<FrameworkElement>("HomePage");
             scanPage = E<FrameworkElement>("ScanPage");
@@ -144,6 +146,7 @@ namespace DiskSpace
             filesPage = E<FrameworkElement>("FilesPage");
             cleanupPage = E<FrameworkElement>("CleanupPage");
             movePage = E<FrameworkElement>("MovePage");
+            protectPage = E<FrameworkElement>("ProtectPage");
             disksPage = E<FrameworkElement>("DisksPage");
             navHome.Checked += (s, e) => ShowPage(homePage);
             navOverview.Checked += (s, e) => ShowPage(overviewPage);
@@ -151,6 +154,7 @@ namespace DiskSpace
             navFiles.Checked += (s, e) => ShowPage(filesPage);
             navCleanup.Checked += (s, e) => ShowPage(cleanupPage);
             navMove.Checked += (s, e) => ShowPage(movePage);
+            navProtect.Checked += (s, e) => ShowPage(protectPage);
             navDisks.Checked += (s, e) => ShowPage(disksPage);
 
             scanContext = E<Border>("ScanContext");
@@ -207,7 +211,7 @@ namespace DiskSpace
         void ShowPage(FrameworkElement page)
         {
             if (currentPage == page) return;
-            foreach (FrameworkElement p in new[] { homePage, scanPage, overviewPage, explorePage, filesPage, cleanupPage, movePage, disksPage })
+            foreach (FrameworkElement p in new[] { homePage, scanPage, overviewPage, explorePage, filesPage, cleanupPage, movePage, protectPage, disksPage })
                 p.Visibility = p == page ? Visibility.Visible : Visibility.Collapsed;
             currentPage = page;
             UpdateSelectionBar();
@@ -225,10 +229,10 @@ namespace DiskSpace
         void Navigate(FrameworkElement page)
         {
             RadioButton item = page == homePage ? navHome : page == overviewPage ? navOverview : page == explorePage ? navExplore :
-                page == filesPage ? navFiles : page == cleanupPage ? navCleanup : page == movePage ? navMove : page == disksPage ? navDisks : null;
+                page == filesPage ? navFiles : page == cleanupPage ? navCleanup : page == movePage ? navMove : page == protectPage ? navProtect : page == disksPage ? navDisks : null;
             if (item == null)
             {
-                foreach (RadioButton r in new[] { navHome, navOverview, navExplore, navFiles, navCleanup, navMove, navDisks }) r.IsChecked = false;
+                foreach (RadioButton r in new[] { navHome, navOverview, navExplore, navFiles, navCleanup, navMove, navProtect, navDisks }) r.IsChecked = false;
             }
             else item.IsChecked = true;
             ShowPage(page);
@@ -237,7 +241,7 @@ namespace DiskSpace
         void SetNavEnabled(bool enabled)
         {
             bool scanned = result != null;
-            navHome.IsEnabled = navDisks.IsEnabled = enabled;
+            navHome.IsEnabled = navDisks.IsEnabled = navProtect.IsEnabled = enabled;
             navOverview.IsEnabled = navExplore.IsEnabled = navFiles.IsEnabled = navCleanup.IsEnabled = navMove.IsEnabled = enabled && scanned;
         }
 
@@ -628,6 +632,7 @@ namespace DiskSpace
                 Navigate(disksPage);
                 return;
             }
+            if (options.Page == "protect") Navigate(protectPage);
             After(500, CaptureAndClose);
         }
 
@@ -642,6 +647,7 @@ namespace DiskSpace
                 case "files": Navigate(filesPage); break;
                 case "cleanup": Navigate(cleanupPage); break;
                 case "move": Navigate(movePage); break;
+                case "protect": Navigate(protectPage); break;
                 case "home": Navigate(homePage); break;
             }
             Node pick = options.Select == null ? null : result.FindNode(Scanner.NormalizePath(options.Select));

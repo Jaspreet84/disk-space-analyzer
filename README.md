@@ -104,6 +104,30 @@ Nothing is suggested if the target would drop below 10% free.
 - **Damaged files are repaired.** If any file doesn't match, **Copy them again** replaces just those files and checks them again.
 - **Existing copies are recognized.** If an identical copy is already on the target drive, the item shows as already copied, with **Check the copy** to confirm it.
 
+## Protect, and the trust checks
+
+Protect is a page in progress. It will show which files would hurt if they leaked (credential files and secrets in text) and which would hurt if a drive died (personal data with one copy). This build has the ground rules the rest is built on:
+
+- **No network code.** The app contains none; it is not switched off, it is absent. The build fails if either program names a `System.Net` type or references a `System.Net` assembly.
+- **Protect never writes a file.** The Protect source files may not call anything that writes, deletes or moves, except the two marked lines that save its own settings file. The build checks this too.
+- **A finding has no room for a value.** The `Finding` type holds a pattern id, a path, a line and column, and a place. The tests check the field list.
+- **Settings hold no paths in clear.** `%LOCALAPPDATA%\DiskSpaceAnalyzer\protect.json` keeps the content-scan switch and a hash per dismissed finding and trusted folder, nothing else.
+- **The app explains itself from its own code.** The Protect page's "What Protect reads" is generated from the same constants the scanner uses, so it describes the build you are running. `dsa --protect-info` prints the same text.
+
+To repeat the no-network check on the built programs:
+
+```
+powershell -ExecutionPolicy Bypass -File tools\check-trust.ps1
+```
+
+It compiles a small checker (`tools\CheckTrust.cs`) that reads each program's metadata and lists every `System.Net` name it finds. To see the same thing from the outside, open Resource Monitor's Network tab while a scan runs: the app never appears.
+
+To run the tests, which also plant a network call and a file write to confirm the checks catch them:
+
+```
+powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1
+```
+
 ## Command-line version
 
 ```
@@ -144,6 +168,8 @@ This writes both programs to `bin\`. The source is in `src\`:
 | `Insights.cs` | Finds the clean-up suggestions |
 | `Placement.cs` | Works out what each drive is for and which items would be better on another drive |
 | `Transfer.cs` | Copies with progress and resume, then checks every file byte for byte |
+| `Protect.cs` | The Protect page's finding type, settings store and self-description |
+| `tools\CheckTrust.cs` | Reads a compiled program's metadata for `System.Net` names |
 | `VirtualDisks.cs` | Finds WSL and Docker disks, cleans caches, prunes Docker, compacts disk files |
 | `Shell.cs` | Explorer, Properties and the Recycle Bin |
 | `Cli.cs` | The command-line version |

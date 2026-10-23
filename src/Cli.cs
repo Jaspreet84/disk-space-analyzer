@@ -16,6 +16,7 @@ namespace DiskSpace
             Console.WriteLine("  --top N     how many entries to show per list and per folder (default 10)");
             Console.WriteLine("  --csv FILE  also write every folder with its size to a CSV file");
             Console.WriteLine("  --moves     only list your drives and what would be better kept on another drive");
+            Console.WriteLine("  --protect-info  print what the Protect page reads and keeps, as this build does it");
             Console.WriteLine();
             Console.WriteLine("Example: dsa C: --depth 3 --top 15");
         }
@@ -34,6 +35,11 @@ namespace DiskSpace
                     else if (a == "--top" && i + 1 < args.Length) top = int.Parse(args[++i]);
                     else if (a == "--csv" && i + 1 < args.Length) csv = args[++i];
                     else if (a == "--moves") moves = true;
+                    else if (a == "--protect-info")
+                    {
+                        Console.Write(ProtectInfo.AsText());
+                        return 0;
+                    }
                     else if (a == "--write-icon" && i + 1 < args.Length)
                     {
                         AppIcon.WriteIcoFile(args[++i]);
