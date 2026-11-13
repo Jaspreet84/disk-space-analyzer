@@ -1,2 +1,271 @@
 # path	expect	tier	place
-# Cases arrive with the name matcher in stage 1. See ../README.md for the format.
+# Protect stage 1, findings by name. Format: ../README.md. No case holds a real credential or a real person's data.
+#! home C:\Users\pat
+#! roaming C:\Users\pat\AppData\Roaming
+#! local C:\Users\pat\AppData\Local
+#! downloads D:\Downloads
+#! downloads C:\Users\pat\Downloads
+#! desktop C:\Users\pat\OneDrive\Desktop
+#! desktop C:\Users\pat\Desktop
+#! documents C:\Users\pat\OneDrive\Documents
+#! documents C:\Users\pat\Documents
+#! pictures C:\Users\pat\Pictures
+#! temp C:\Users\pat\AppData\Local\Temp
+#! sync C:\Users\pat\OneDrive
+#! external F:\
+#! repo C:\Users\pat\code\app
+#! repo C:\Users\pat\code\infra
+#! repo C:\Users\pat\code\toolkit
+# --- ssh-key
+.ssh/id_rsa	ssh-key	Confirmed	UsualPlace
+.ssh/id_ed25519	ssh-key	Confirmed	UsualPlace
+.ssh/work/id_ecdsa	ssh-key	Confirmed	UsualPlace
+#! siblings deploy_github.pub,known_hosts
+.ssh/deploy_github	ssh-key	Confirmed	UsualPlace
+.ssh/id_rsa.pub	none	-	-
+#! siblings known_hosts.old
+.ssh/known_hosts	none	-	-
+.ssh/known_hosts.old	none	-	-
+.ssh/authorized_keys	none	-	-
+.ssh/config	none	-	-
+Downloads/id_rsa	ssh-key	Likely	Downloads
+Desktop/id_ed25519 (1)	ssh-key	Likely	Desktop
+Downloads/old-laptop/.ssh/id_rsa	ssh-key	Likely	Downloads
+.ssh/id_ed25519 (1)	ssh-key	Confirmed	UsualPlace
+.ssh/id_rsa - Copy	ssh-key	Confirmed	UsualPlace
+.minikube/machines/dev/id_rsa	ssh-key	Confirmed	UsualPlace
+code/app/deploy/id_rsa	ssh-key	Likely	Repository
+code/app/tests/fixtures/id_rsa	none	-	-
+go/pkg/mod/golang.org/x/crypto@v0.1.0/ssh/testdata/id_rsa	none	-	-
+AppData/Local/Temp/unzipped/id_rsa	ssh-key	Likely	Temp
+# --- ssh-ppk
+Desktop/server.ppk	ssh-ppk	Confirmed	Desktop
+OneDrive/Desktop/server.ppk	ssh-ppk	Confirmed	Synced
+.ssh/work.ppk	ssh-ppk	Confirmed	UsualPlace
+#! size 200000
+Downloads/big.ppk	none	-	-
+# --- pem-key
+#! size 1675
+aws.pem	pem-key	Likely	HomeFolder
+#! size 1700
+aws-keys/bot.pem	pem-key	Likely	HomeFolder
+#! size 1674
+OneDrive/Documents/AWS/ztna-proxy.pem	pem-key	Likely	Synced
+#! size 1678
+D:/Downloads/appconnectors.pem	none	-	-
+Desktop/server-key.pem	pem-key	Likely	Desktop
+Downloads/private.pem	pem-key	Likely	Downloads
+#! size 5208
+D:/Downloads/netlify-app-chain.pem	none	-	-
+#! size 1736
+D:/Downloads/musical-toffee-35f4f1-netlify-app-chain.pem	none	-	-
+D:/Downloads/zscaler.crt	none	-	-
+#! size 1700
+Downloads/server.pem	none	-	-
+Downloads/license.key	none	-	-
+.minikube/profiles/dev/client.key	pem-key	Confirmed	UsualPlace
+.minikube/ca.key	pem-key	Confirmed	UsualPlace
+.minikube/ca.pem	none	-	-
+.minikube/cert.pem	none	-	-
+#! size 119
+.claude/sessions/1234.ab12cd34.key	none	-	-
+#! size 461
+code/icon-tool/vault/vault.key	none	-	-
+#! size 1704
+code/poc/keys/deploy-poc.pem	none	-	-
+node_modules/https-proxy/test/key.pem	none	-	-
+#! size 4000000
+Documents/Talks/Roadmap.key	none	-	-
+code/app/certs/localhost-key.pem	none	-	-
+AppData/Local/Temp/installer/key.pem	none	-	-
+C:/Program Files/Git/usr/ssl/private/server.key	none	-	-
+C:/Program Files/Git/usr/ssl/certs/ca-bundle.crt	none	-	-
+.cargo/registry/src/x/webpki-roots-0.25.2/tests/data/root.der	none	-	-
+# --- pkcs12
+#! size 2600
+Downloads/signing.pfx	pkcs12	Likely	Downloads
+#! size 2600
+code/app/devcert.pfx	none	-	-
+#! size 2600
+Downloads/truststore.p12	none	-	-
+# --- java-keystore
+.android/debug.keystore	java-keystore	Confirmed	UsualPlace
+D:/Downloads/debug.keystore	none	-	-
+F:/phone-app/release.jks	java-keystore	Likely	ExternalDrive
+AppData/Local/Microsoft/OneDrive/logs/Personal/general.keystore	none	-	-
+Downloads/app/build/intermediates/upload.keystore	none	-	-
+AppData/Local/Packages/Microsoft.SkypeApp_kzf8qxf38zg5c/LocalState/dtlskey.der	none	-	-
+# --- password-vault
+D:/Downloads/backup (1).kdbx	password-vault	Confirmed	Downloads
+Documents/Passwords.kdbx	password-vault	Confirmed	UsualPlace
+OneDrive/Documents/Personal.kdbx	password-vault	Confirmed	Synced
+F:/tax2025/backup (1) (1).kdbx	password-vault	Confirmed	ExternalDrive
+D:/vault/main.opvault/	password-vault	Confirmed	Other
+#! size 0
+Downloads/empty.kdbx	none	-	-
+# --- password-export
+D:/Downloads/Chrome Passwords (1).csv	password-export	Confirmed	Downloads
+OneDrive/Desktop/bitwarden_export_20260101.json	password-export	Confirmed	Synced
+Downloads/export.1pux	password-export	Confirmed	Downloads
+Downloads/passwords.csv	password-export	Likely	Downloads
+Documents/course/week3/datasets/passwords.csv	none	-	-
+Downloads/common-passwords.csv	none	-	-
+#! size 241951
+AppData/Local/Google/Chrome/User Data/ZxcvbnData/3/passwords.txt	none	-	-
+AppData/Local/Google/Chrome/User Data/Profile 5/Extensions/abc/1.0/PasswordsToolbar32.png	none	-	-
+# --- git-credentials
+.git-credentials	git-credentials	Confirmed	UsualPlace
+D:/backup/home/.git-credentials	git-credentials	Likely	Other
+.gitconfig	none	-	-
+# --- netrc
+_netrc	netrc	Confirmed	UsualPlace
+OneDrive/Documents/.netrc	netrc	Likely	Synced
+code/infra/.netrc	none	-	-
+# --- aws-credentials, aws-keys-csv
+.aws/credentials	aws-credentials	Confirmed	UsualPlace
+Downloads/old-laptop/.aws/credentials	aws-credentials	Likely	Downloads
+.aws/config	none	-	-
+credentials	none	-	-
+Downloads/pat_accessKeys.csv	aws-keys-csv	Likely	Downloads
+code/app/docs/rootkey.csv	none	-	-
+# --- azure-tokens
+.azure/msal_token_cache.json	azure-tokens	Confirmed	UsualPlace
+.azure/azureProfile.json	none	-	-
+# --- gcloud-credentials
+AppData/Roaming/gcloud/application_default_credentials.json	gcloud-credentials	Confirmed	UsualPlace
+Downloads/application_default_credentials.json	gcloud-credentials	Likely	Downloads
+Downloads/application_default_credentials (1).json	gcloud-credentials	Likely	Downloads
+AppData/Roaming/gcloud/configurations/config_default	none	-	-
+# --- gh-hosts
+AppData/Roaming/GitHub CLI/hosts.yml	gh-hosts	Likely	UsualPlace
+code/app/.github/hosts.yml	none	-	-
+# --- kubeconfig
+.kube/config	kubeconfig	Confirmed	UsualPlace
+.kube/config - Copy	kubeconfig	Confirmed	UsualPlace
+Downloads/prod.kubeconfig	kubeconfig	Likely	Downloads
+.kube/cache/discovery/config	none	-	-
+code/infra/kubeconfig.yaml	none	-	-
+# --- docker-config
+.docker/config.json	docker-config	Likely	UsualPlace
+.docker/.token_seed	none	-	-
+# --- npm-rc, pypi-rc, cli-auth-file
+.npmrc	npm-rc	Likely	UsualPlace
+#! size 22
+code/toolkit/.npmrc	none	-	-
+.codex/.tmp/plugins/vinext-starter/.npmrc	none	-	-
+.antigravity/extensions/ext-1.0/server/.npmrc	none	-	-
+.pypirc	pypi-rc	Likely	UsualPlace
+.codex/auth.json	cli-auth-file	Likely	UsualPlace
+.claude/.credentials.json	cli-auth-file	Likely	UsualPlace
+Downloads/auth.json	none	-	-
+# --- dotnet-user-secrets
+AppData/Roaming/Microsoft/UserSecrets/6f1c2a90-0000-4000-8000-000000000001/secrets.json	dotnet-user-secrets	Confirmed	UsualPlace
+code/app/secrets.json	none	-	-
+# --- terraform-credentials, tfstate
+AppData/Roaming/terraform.d/credentials.tfrc.json	terraform-credentials	Confirmed	UsualPlace
+code/infra/terraform.tfstate	tfstate	Likely	Repository
+Downloads/terraform.tfstate.backup	tfstate	Likely	Downloads
+code/infra/.terraform/terraform.tfstate	none	-	-
+code/infra/examples/terraform.tfstate	none	-	-
+# --- dotenv
+.env.proj-03d2990a	dotenv	Likely	HomeFolder
+Downloads/backup/.env	dotenv	Likely	Downloads
+OneDrive/projects/site/.env.production	dotenv	Likely	Synced
+Desktop/.secrets.env	dotenv	Likely	Desktop
+code/app/.env	dotenv	Likely	Repository
+code/app/.secrets.env	dotenv	Likely	Repository
+code/app/.env.example	none	-	-
+Downloads/.env.sample	none	-	-
+code/app/types/.env.d.ts	none	-	-
+AppData/Local/Claude-Data/scratch-1/ztb-tests/.env	none	-	-
+Documents/Codex/2026-09-27/app/outputs/service/.env	none	-	-
+.claude/worktrees/feature-a/.env	none	-	-
+projects/web/node_modules/dotenv/.env	none	-	-
+# --- pgp-secret
+.gnupg/private-keys-v1.d/3A1F0C9E2B7D4A6C8E0F1A2B3C4D5E6F7A8B9C0D.key	pgp-secret	Confirmed	UsualPlace
+Downloads/pat-secret-key.asc	pgp-secret	Likely	Downloads
+Downloads/pat-public-key.asc	none	-	-
+.cargo/registry/src/x/untrusted-0.9.0/mk/llvm-snapshot.gpg.key	none	-	-
+# --- pgpass
+AppData/Roaming/postgresql/pgpass.conf	pgpass	Confirmed	UsualPlace
+Desktop/.pgpass	pgpass	Likely	Desktop
+# --- crypto-wallet, eth-keystore, electrum-wallet
+#! size 98304
+AppData/Roaming/Bitcoin/wallets/main/wallet.dat	crypto-wallet	Confirmed	UsualPlace
+#! size 98304
+D:/Downloads/wallet.dat	crypto-wallet	Likely	Downloads
+#! size 98304
+D:/Downloads/wallet (1).dat	crypto-wallet	Likely	Downloads
+#! size 1024
+Downloads/wallet.dat	none	-	-
+Documents/UTC--2021-05-01T10-11-12.123Z--0123456789abcdef0123456789abcdef01234567	eth-keystore	Confirmed	HomeFolder
+Downloads/UTC--2021-05-01--notakey.json	none	-	-
+AppData/Roaming/Electrum/wallets/default_wallet	electrum-wallet	Confirmed	UsualPlace
+Desktop/default_wallet	electrum-wallet	Likely	Desktop
+# --- recovery-codes, emergency-kit
+D:/Downloads/github-recovery-codes.txt	recovery-codes	Confirmed	Downloads
+code/app/docs/github-recovery-codes.txt	none	-	-
+D:/Downloads/1Password Emergency Kit A3-ABC123.pdf	emergency-kit	Confirmed	Downloads
+AppData/Roaming/Microsoft/Windows/Recent/1Password Emergency Kit A3.pdf.lnk	none	-	-
+# --- publish-settings, htpasswd
+Downloads/myapp.PublishSettings	publish-settings	Likely	Downloads
+code/site/.htpasswd	htpasswd	Likely	Other
+code/site/.htpasswd.example	none	-	-
+# --- doc-tax, doc-tax-file
+D:/Downloads/W2-2024.pdf	doc-tax	Likely	Downloads
+D:/Downloads/2025_TaxReturn.pdf	doc-tax	Likely	Downloads
+D:/tax2025/Citi-2025 IRS Form 1099-INT.pdf	doc-tax	Likely	Other
+D:/tax2025/capitalone-1099-9nt.pdf	doc-tax	Likely	Other
+D:/tax2025/etrade/taxreportpdf.pdf	doc-tax	Likely	Other
+D:/tax2025/TurboTaxReturn-ca.tax2024	doc-tax-file	Confirmed	Other
+AppData/Local/Packages/microsoft.windowscommunicationsapps_8wekyb3d8bbwe/LocalState/Files/S0/4/Attachments/w2-2017[328].pdf	doc-tax	Likely	Other
+AppData/Local/Temp/Rar$EXa1.2/W2-2023.pdf	doc-tax	Likely	Temp
+OneDrive/Desktop/T4 2019.pdf	doc-tax	Likely	Synced
+#! online
+OneDrive/Documents/W2-2022.pdf	doc-tax	Likely	Synced
+#! size 800000
+D:/backup-june2026/Pictures/2016-09/t4-vULuE.jpg	none	-	-
+#! size 3000000
+Pictures/2019/IMG_1099.JPG	none	-	-
+Downloads/sample-w2-2024.pdf	none	-	-
+Downloads/tax-invoice-4471.pdf	none	-	-
+Downloads/sales-tax-rates-2024.xlsx	none	-	-
+Downloads/order-1099.pdf	none	-	-
+D:/Downloads/TAX PREPARATION CHECKLIST - 2022.pdf	none	-	-
+Documents/Taxi receipt Lisbon.pdf	none	-	-
+AppData/Local/Packages/microsoft.windowscommunicationsapps_8wekyb3d8bbwe/LocalState/Files/S0/2/CalendarIcons/taxi1.svg	none	-	-
+# --- doc-statement, doc-pay
+D:/Downloads/AccountStatements/2023-01-15 Statement - Checking 1234.pdf	doc-statement	Likely	Downloads
+#! size 300000
+Pictures/2023/Statements/Chase statement Jan 2023.png	doc-statement	Likely	UsualPlace
+D:/Downloads/pay_statements.zip	doc-pay	Likely	Downloads
+Documents/Scanned Documents/kids - Copy/payslips/Payslip-Jan2016-E0001.pdf	doc-pay	Likely	UsualPlace
+Desktop/statement-of-work.docx	none	-	-
+Documents/Personal Statement 2025.pdf	none	-	-
+code/app/docs/sample-statement.pdf	none	-	-
+code/app/db/supabase-statements.md	none	-	-
+code/toolkit/policies/bank_statement.rego	none	-	-
+D:/Downloads/AccountStatements/	none	-	-
+Documents/Statements/	none	-	-
+# --- doc-id
+#! size 2000000
+D:/Downloads/Pat-passport.JPG	doc-id	Likely	Downloads
+OneDrive/Documents/Old Passport_Pat.pdf	doc-id	Likely	Synced
+Documents/Pat-California-Drivers-License.pdf	doc-id	Likely	UsualPlace
+#! size 900000
+D:/backup-june2026/Pictures/Scans/oldpassport1.jpg	doc-id	Likely	Other
+#! size 4000
+Pictures/passport-photo-icon.png	none	-	-
+Pictures/icons/passport-icon.svg	none	-	-
+#! online
+Pictures/passport scan.jpg	none	-	-
+AppData/Roaming/Microsoft/Windows/Recent/Old Passport_Pat.pdf.lnk	none	-	-
+.cache/node_modules/lucide/icons/id-card.js	none	-	-
+src/shop/node_modules/passport/lib/passport.js	none	-	-
+# --- doc-scans-folder
+Documents/Scanned Documents/	doc-scans-folder	Likely	UsualPlace
+# --- other bait from this PC
+D:/Downloads/sbi/XXXXXX00000_A_2026-No-Password.pdf	none	-	-
+AppData/Local/Temp/android-sdk/password_kbd_1.xml	none	-	-
+Documents/projects/django-stubs/contrib/auth/password_validation.pyi	none	-	-
+AppData/Roaming/NuGet/NuGet.Config	none	-	-

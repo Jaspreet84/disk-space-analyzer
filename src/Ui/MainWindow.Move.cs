@@ -17,11 +17,19 @@ namespace DiskSpace
     {
         public List<DriveProfile> Drives;
         public List<MoveSuggestion> Suggestions;
+        public List<DirNode> Personal = new List<DirNode>();  // large personal folders, for Protect's backup check
 
         public static MovePlan For(ScanResult r)
         {
-            var plan = new MovePlan { Drives = DiskSpace.Drives.Load() };
+            return For(r, DiskSpace.Drives.Load());
+        }
+
+        // StartScan loads the drives before Analyze (Protect needs them), so it passes them in.
+        public static MovePlan For(ScanResult r, List<DriveProfile> drives)
+        {
+            var plan = new MovePlan { Drives = drives ?? DiskSpace.Drives.Load() };
             plan.Suggestions = Placement.Suggest(r, plan.Drives);
+            plan.Personal = Placement.PersonalCandidates(r);
             return plan;
         }
     }
@@ -172,6 +180,12 @@ namespace DiskSpace
 
         async void RunSuggestion(MoveSuggestion m, bool moveInstead)
         {
+            await RunSuggestionAsync(m, moveInstead);
+        }
+
+        // The same, for callers that act when it is done (Protect refreshes its backup check).
+        async Task RunSuggestionAsync(MoveSuggestion m, bool moveInstead)
+        {
             if (busy || moveCancel != null || result == null) return;
             if (m.AlreadyCopied) await CheckCopy(m);
             else if (m.Action == MoveAction.Copy && !moveInstead) await CopyOrMove(m, false);
@@ -192,22 +206,36 @@ namespace DiskSpace
                 Style = (Style)Res("Caption"),
                 TextWrapping = TextWrapping.Wrap
             });
-            body.Children.Add(Paragraph(move
-                ? "It's copied first and every file is compared with the original. Only then does the original go to the Recycle Bin. " +
-                  "If it's too big for the Recycle Bin, Windows asks before deleting it for good."
-                : "It's copied and then every file is compared with the original. The original stays where it is.", 14));
+            if (m.UpdateExisting && !move)
+            {
+                // Updating a copy that is already there writes into a folder the user has; say exactly what changes.
+                body.Children.Add(Paragraph(m.Destination + " already exists. Files missing from it are added. A file there with the " +
+                                            "same name but a different size or date is replaced with the version from here, unless the " +
+                                            "one in " + m.Destination + " is newer: those are kept and listed, so you can decide. " +
+                                            "Files that are only in the copy stay.", 14));
+                body.Children.Add(Paragraph("Then every file is compared with the original. The original stays where it is.", 12));
+            }
+            else
+                body.Children.Add(Paragraph(move
+                    ? "It's copied first and every file is compared with the original. Only then does the original go to the Recycle Bin. " +
+                      "If it's too big for the Recycle Bin, Windows asks before deleting it for good."
+                    : "It's copied and then every file is compared with the original. The original stays where it is.", 14));
             if (move && m.Action == MoveAction.Copy)
                 body.Children.Add(Paragraph("Moving leaves a single copy, on " + m.To.Letter + ". If that drive fails or gets lost, so does this. " +
                                             "Copying keeps one on each drive.", 12));
             body.Children.Add(Paragraph(EstimateText(m.Item.Size) + " Keep both drives connected until it finishes. If it's interrupted, " +
                                         "starting again picks up where it stopped.", 12));
-            string verb = move ? "Move" : "Copy";
-            if (!await ShowDialog(verb + " to " + m.To.Letter + "?", body, verb, "Cancel", move && m.Action == MoveAction.Copy)) return;
+            bool update = m.UpdateExisting && !move;
+            string verb = move ? "Move" : update ? "Update" : "Copy";
+            string question = update ? "Update the copy on " + m.To.Letter + "?" : verb + " to " + m.To.Letter + "?";
+            if (!await ShowDialog(question, body, verb, "Cancel", move && m.Action == MoveAction.Copy)) return;
 
+            // An update only needs room for what the copy does not hold yet.
+            long needed = update ? Math.Max(0, m.Item.Size - m.ExistingBytes) : m.Item.Size;
             long free = new DriveInfo(m.To.Root).AvailableFreeSpace;
-            if (free < m.Item.Size + (1L << 30))
+            if (free < needed + (1L << 30))
             {
-                ShowError(m.To.Letter + " has only " + Fmt.Size(free) + " free, which isn't enough for " + Fmt.Size(m.Item.Size) + ".");
+                ShowError(m.To.Letter + " has only " + Fmt.Size(free) + " free, which isn't enough for " + Fmt.Size(needed) + ".");
                 return;
             }
 
@@ -240,6 +268,10 @@ namespace DiskSpace
 
         async Task CheckCopy(MoveSuggestion m)
         {
+            // Checking reads every file on both sides, so it asks first.
+            if (!await ShowDialog("Check the copy byte for byte?",
+                    "This reads every file in both folders to compare them. It can take a while.", "Check", "Cancel", false))
+                return;
             if (await CopyAndCheck(m, "Checking the copy of " + m.Item.Name, false))
                 Toast("Every file in the copy on " + m.To.Letter + " matches the original");
         }
@@ -249,6 +281,7 @@ namespace DiskSpace
         async Task<bool> CopyAndCheck(MoveSuggestion m, string title, bool copyFirst)
         {
             string src = m.Item.FullPath;
+            bool keepNewer = m.UpdateExisting;  // updating an existing copy never replaces a newer file without asking
             HashSet<string> recopy = null;
             while (true)
             {
@@ -258,7 +291,7 @@ namespace DiskSpace
                 {
                     if (copy)
                     {
-                        List<TransferProblem> failed = Transfer.Copy(src, m.Destination, p, token, again);
+                        List<TransferProblem> failed = Transfer.Copy(src, m.Destination, p, token, again, keepNewer);
                         if (failed.Count > 0 || token.IsCancellationRequested) return failed;
                     }
                     return Transfer.Verify(src, m.Destination, p, token);
@@ -267,15 +300,31 @@ namespace DiskSpace
                 if (problems.Count == 0) return true;
 
                 var lines = new List<string>();
+                int kept = 0;
                 recopy = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (TransferProblem x in problems)
                 {
                     lines.Add(x.ToString());
                     recopy.Add(x.Path);
+                    if (x.KeptNewer) kept++;
                 }
-                string heading = Fmt.Count(problems.Count) + (problems.Count == 1 ? " file doesn't match" : " files don't match");
-                if (!await ShowProblemList(heading, "The original wasn't touched. A full or disconnected drive is the usual cause. " +
-                                           "Copying them again replaces just these files in the copy.", lines, "Copy them again"))
+                string heading, text, action;
+                if (kept == problems.Count)
+                {
+                    heading = Fmt.Count(kept) + (kept == 1 ? " file is newer in the copy" : " files are newer in the copy");
+                    text = "They were not replaced; every other file was copied. Replace them with the older versions from here " +
+                           "only if you are sure the copy's versions are not needed. Until then the copy is not checked.";
+                    action = "Replace them";
+                }
+                else
+                {
+                    heading = Fmt.Count(problems.Count) + (problems.Count == 1 ? " file doesn't match" : " files don't match");
+                    text = "The original wasn't touched. A full or disconnected drive is the usual cause. " +
+                           "Copying them again replaces just these files in the copy." +
+                           (kept > 0 ? " That includes the files that are newer in the copy." : "");
+                    action = "Copy them again";
+                }
+                if (!await ShowProblemList(heading, text, lines, action))
                     return false;
                 title = "Copying " + Fmt.Count(problems.Count) + (problems.Count == 1 ? " file" : " files") + " again";
             }
@@ -286,6 +335,8 @@ namespace DiskSpace
         {
             busy = true;
             UpdateSelectionBar();
+            // A copy started from another page (Protect's "Copy to F:…") shows its progress here.
+            if (currentPage != movePage) Navigate(movePage);
             moveCancel = new CancellationTokenSource();
             CancellationToken token = moveCancel.Token;
             moveProgress = new TransferProgress();

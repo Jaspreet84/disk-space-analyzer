@@ -18,8 +18,28 @@ namespace DiskSpace
             get
             {
                 if (Parent == null) return Name;
-                string p = Parent.FullPath;
-                return p.EndsWith("\\", StringComparison.Ordinal) ? p + Name : p + "\\" + Name;
+                if (Parent.Parent == null)
+                {
+                    string p = Parent.Name;
+                    return p.EndsWith("\\", StringComparison.Ordinal) ? p + Name : p + "\\" + Name;
+                }
+                // Built in one buffer: a deep path no longer copies every ancestor's path once per level.
+                int length = 0;
+                for (Node n = this; n != null; n = n.Parent) length += n.Name.Length + 1;
+                var chars = new char[length];
+                int at = length;
+                for (Node n = this; n != null; n = n.Parent)
+                {
+                    string s = n.Name;
+                    at -= s.Length;
+                    s.CopyTo(0, chars, at, s.Length);
+                    if (n.Parent != null)
+                    {
+                        bool rootEndsInSlash = n.Parent.Parent == null && n.Parent.Name.EndsWith("\\", StringComparison.Ordinal);
+                        if (!rootEndsInSlash) chars[--at] = '\\';
+                    }
+                }
+                return new string(chars, at, length - at);
             }
         }
 
@@ -47,6 +67,10 @@ namespace DiskSpace
         public long DirCount;                 // folders anywhere below this folder
         public bool Unreadable;               // the folder could not be listed, usually because access was denied
         public bool Unaccounted;              // stand-in for used drive space that no scanned file explains
+        public long LogicalBytes;             // sum of file lengths below, placeholders and compressed files at full length
+        public bool LogicalStale;             // a flagged file below was removed after the scan, so LogicalBytes is not exact
+        public bool StaleHere;                // such a file was directly in this folder (LogicalStale is worked out from it)
+        public int OnlineOnlyFiles;          // online-only (cloud placeholder) files anywhere below
     }
 
     [Flags]
@@ -140,6 +164,7 @@ namespace DiskSpace
         public readonly int Index;
         public long Size;
         public long Count;
+        public byte ProtectHint;  // ProtectNames.ExtHint of Key, set by Analyze
 
         public ExtInfo(string key, Category category, int index)
         {
@@ -168,6 +193,18 @@ namespace DiskSpace
         public long[] CategoryFiles = new long[Categories.Count];
         public List<FileNode> LargestFiles = new List<FileNode>();
         public List<FileNode>[] LargestByCategory = new List<FileNode>[Categories.Count];
+
+        // Protect. The context is built by the caller before the first Analyze() and survives Replace; null turns
+        // Protect off. Findings and FindingNodes (a FileNode, or a DirNode for a folder finding) are parallel lists.
+        public ProtectContext Protect;
+        public List<Finding> Findings = new List<Finding>();
+        public List<Node> FindingNodes = new List<Node>();
+
+        struct Frame
+        {
+            public DirNode Dir;
+            public DirState State;
+        }
 
         // The node at a full path, or null if the path is not part of this scan.
         public Node FindNode(string path)
@@ -248,22 +285,34 @@ namespace DiskSpace
             var heap = new List<FileNode>(LargestFilesKept + 1);
             var heaps = new List<FileNode>[Categories.Count];
             for (int c = 0; c < heaps.Length; c++) heaps[c] = new List<FileNode>();
-            var stack = new Stack<DirNode>();
-            stack.Push(Root);
+            ProtectScan ps = Protect == null ? null : new ProtectScan(this, Protect);
+            var stack = new Stack<Frame>();
+            Frame top;
+            top.Dir = Root;
+            top.State = ps != null ? ps.RootState : new DirState();
+            stack.Push(top);
             while (stack.Count > 0)
             {
-                DirNode dir = stack.Pop();
+                Frame frame = stack.Pop();
+                DirNode dir = frame.Dir;
                 if (dir.Unaccounted)
                 {
                     categoryBytes[(int)Category.Unaccounted] += dir.Size;
                     continue;
                 }
+                // Files are looked at only where a row can fire; a pending Scanned Documents folder still counts them.
+                bool looks = ps != null && (frame.State.ScansSlot != 0 ? (frame.State.Flags & DirFlags.Skip) == 0
+                                                                       : !ProtectNames.NothingFoundIn(frame.State));
+                bool wholeDir = looks && frame.State.Tool != ToolHome.None;  // every file in a tool home is a candidate
                 foreach (Node child in dir.Children)
                 {
                     var sub = child as DirNode;
                     if (sub != null)
                     {
-                        stack.Push(sub);
+                        Frame next;
+                        next.Dir = sub;
+                        next.State = ps != null && !sub.Unaccounted ? ps.Enter(frame.State, sub) : frame.State;
+                        stack.Push(next);
                         continue;
                     }
                     var file = (FileNode)child;
@@ -273,10 +322,23 @@ namespace DiskSpace
                     {
                         index = exts.Count;
                         keys.Add(key, index);
-                        exts.Add(new ExtInfo(key, Categories.ForKey(key), index));
+                        var info = new ExtInfo(key, Categories.ForKey(key), index);
+                        info.ProtectHint = ProtectNames.ExtHint(key);
+                        exts.Add(info);
                     }
                     file.Ext = index;
                     ExtInfo ext = exts[index];
+                    if (looks)
+                    {
+                        // The per-file gate: for most files one field read and one char compare.
+                        byte hint = ext.ProtectHint;
+                        string name = file.Name;
+                        char c0 = name.Length > 0 ? name[0] : '\0';
+                        if ((hint != ProtectNames.HintNone || wholeDir || c0 == '.' || c0 == '_' || c0 == 'U') &&
+                            (ProtectNames.IsCandidate(name, hint, frame.State.Tool, frame.State.ToolDepth, frame.State.HomeDepth) ||
+                             (frame.State.ScansSlot != 0 && hint == ProtectNames.HintDoc)))
+                            ps.File(file, hint, frame.State);
+                    }
                     ext.Size += file.Size;
                     ext.Count++;
                     categoryBytes[(int)ext.Category] += file.Size;
@@ -292,6 +354,11 @@ namespace DiskSpace
             CategoryFiles = categoryFiles;
             LargestFiles = heap;
             LargestByCategory = heaps;
+            var found = new List<Finding>();
+            var nodes = new List<Node>();
+            if (ps != null) ps.Finish(found, nodes);
+            Findings = found;
+            FindingNodes = nodes;
         }
 
         public const int LargestPerCategoryKept = 500;
@@ -341,10 +408,27 @@ namespace DiskSpace
             DirNode parent = old.Parent;
             if (parent == null) throw new InvalidOperationException("The scan root cannot be replaced.");
 
-            long sizeDelta = -old.Size, fileDelta, dirDelta;
+            long sizeDelta = -old.Size, fileDelta, dirDelta, logicalDelta;
+            int onlineDelta;
+            bool stale = false;  // a flagged file directly in parent was removed or added: its total is not exact
             var oldDir = old as DirNode;
-            if (oldDir != null) { fileDelta = -oldDir.FileCount; dirDelta = -(1 + oldDir.DirCount); }
-            else { fileDelta = -1; dirDelta = 0; }
+            if (oldDir != null)
+            {
+                fileDelta = -oldDir.FileCount;
+                dirDelta = -(1 + oldDir.DirCount);
+                logicalDelta = -oldDir.LogicalBytes;
+                onlineDelta = -oldDir.OnlineOnlyFiles;
+            }
+            else
+            {
+                fileDelta = -1;
+                dirDelta = 0;
+                var oldFile = (FileNode)old;
+                // A placeholder or compressed file's full length is not in the model, so the totals become inexact.
+                if (oldFile.Flags != 0) { logicalDelta = 0; stale = true; }
+                else logicalDelta = -old.Size;
+                onlineDelta = (oldFile.Flags & FileFlags.OnlineOnly) != 0 ? -1 : 0;
+            }
 
             var kids = new List<Node>(parent.Children);
             int at = kids.IndexOf(old);
@@ -359,16 +443,41 @@ namespace DiskSpace
                 replacement.Parent = parent;
                 sizeDelta += replacement.Size;
                 var newDir = replacement as DirNode;
-                if (newDir != null) { fileDelta += newDir.FileCount; dirDelta += 1 + newDir.DirCount; }
-                else fileDelta += 1;
+                if (newDir != null)
+                {
+                    fileDelta += newDir.FileCount;
+                    dirDelta += 1 + newDir.DirCount;
+                    logicalDelta += newDir.LogicalBytes;
+                    onlineDelta += newDir.OnlineOnlyFiles;
+                }
+                else
+                {
+                    fileDelta += 1;
+                    var newFile = (FileNode)replacement;
+                    if (newFile.Flags != 0) stale = true;
+                    else logicalDelta += replacement.Size;
+                    if ((newFile.Flags & FileFlags.OnlineOnly) != 0) onlineDelta += 1;
+                }
             }
             parent.Children = kids.ToArray();
+            if (stale) parent.StaleHere = true;
 
+            // LogicalStale is worked out again on every folder above, so a rescan of the stale part (a fresh
+            // replacement whose totals are exact) clears it on the folders above as well.
             for (DirNode p = parent; p != null; p = p.Parent)
             {
                 p.Size += sizeDelta;
                 p.FileCount += fileDelta;
                 p.DirCount += dirDelta;
+                p.LogicalBytes += logicalDelta;
+                p.OnlineOnlyFiles += onlineDelta;
+                bool staleBelow = p.StaleHere;
+                for (int i = 0; i < p.Children.Length && !staleBelow; i++)
+                {
+                    var d = p.Children[i] as DirNode;
+                    if (d != null && d.LogicalStale) staleBelow = true;
+                }
+                p.LogicalStale = staleBelow;
                 Array.Sort(p.Children, Node.CompareBySize);
             }
             Analyze();

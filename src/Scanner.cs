@@ -118,6 +118,7 @@ namespace DiskSpace
             List<string> subNames = null;
             List<long> subWrites = null;
             long fileBytes = 0, cloudBytes = 0, cloudFiles = 0;
+            long logical = 0;  // full file lengths, counting placeholders and compressed files at their full size
 
             Native.WIN32_FIND_DATA fd;
             IntPtr h = Native.FindFirstFileExW(SearchPattern(path), Native.FindExInfoBasic, out fd, 0, IntPtr.Zero,
@@ -163,6 +164,7 @@ namespace DiskSpace
 
                     var file = new FileNode { Name = fileName, Parent = node, LastWrite = written };
                     long size = ((long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+                    logical += size;
                     if ((attributes & OnlineOnlyAttributes) != 0)
                     {
                         // Cloud placeholders report their full size but keep no data on this PC.
@@ -221,6 +223,8 @@ namespace DiskSpace
             var kids = new Node[files.Count + (subs == null ? 0 : subs.Length)];
             files.CopyTo(kids);
             long total = fileBytes, fileCount = files.Count, dirCount = 0, newest = ownWrite;
+            long logicalTotal = logical;
+            int onlineTotal = (int)cloudFiles;
             foreach (Node f in files)
                 if (f.LastWrite > newest) newest = f.LastWrite;
             if (subs != null)
@@ -230,6 +234,8 @@ namespace DiskSpace
                     DirNode s = subs[i];
                     kids[files.Count + i] = s;
                     total += s.Size;
+                    logicalTotal += s.LogicalBytes;
+                    onlineTotal += s.OnlineOnlyFiles;
                     fileCount += s.FileCount;
                     dirCount += 1 + s.DirCount;
                     if (s.LastWrite > newest) newest = s.LastWrite;
@@ -238,6 +244,8 @@ namespace DiskSpace
             Array.Sort(kids, Node.CompareBySize);
             node.Children = kids;
             node.Size = total;
+            node.LogicalBytes = logicalTotal;
+            node.OnlineOnlyFiles = onlineTotal;
             node.FileCount = fileCount;
             node.DirCount = dirCount;
             node.LastWrite = newest;

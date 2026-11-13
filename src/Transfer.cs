@@ -20,6 +20,7 @@ namespace DiskSpace
     sealed class TransferProblem
     {
         public string Path, Name, Message;
+        public bool KeptNewer;  // not copied because the file already at the destination is newer (an update keeps it)
 
         public override string ToString()
         {
@@ -90,9 +91,11 @@ namespace DiskSpace
 
         // Copies source to destination. Files already there with the same size and date are kept, so an interrupted
         // copy picks up where it stopped, except those in recopy (files a check found different). Returns the files
-        // that could not be copied.
+        // that could not be copied. With keepNewer (updating an existing copy), a file already at the destination that
+        // is newer than the original is not replaced, unless it is in recopy (the user chose to replace it); it is
+        // returned with KeptNewer set.
         public static List<TransferProblem> Copy(string source, string destination, TransferProgress p, CancellationToken cancel,
-            HashSet<string> recopy)
+            HashSet<string> recopy, bool keepNewer = false)
         {
             var problems = new List<TransferProblem>();
             var folders = new List<string>();
@@ -114,7 +117,21 @@ namespace DiskSpace
                 string from = Join(source, f.Key), to = Join(destination, f.Key);
                 p.Current = single ? Path.GetFileName(source) : f.Key;
                 long before = p.DoneBytes;
-                if ((recopy != null && recopy.Contains(f.Key)) || !AlreadyCopied(from, to, f.Value))
+                bool forced = recopy != null && recopy.Contains(f.Key);
+                if (keepNewer && !forced && IsNewer(to, from))
+                {
+                    problems.Add(new TransferProblem
+                    {
+                        Path = f.Key,
+                        Name = f.Key.Length == 0 ? Path.GetFileName(source) : f.Key,
+                        Message = "the copy has a newer version, so it was kept",
+                        KeptNewer = true
+                    });
+                    p.DoneBytes = before + f.Value;
+                    p.DoneFiles++;
+                    continue;
+                }
+                if (forced || !AlreadyCopied(from, to, f.Value))
                 {
                     int cancelFlag = 0;
                     CopyProgressRoutine progress = (total, transferred, streamSize, streamDone, stream, reason, src, dst, data) =>
@@ -148,6 +165,14 @@ namespace DiskSpace
                 catch (UnauthorizedAccessException) { }
             }
             return problems;
+        }
+
+        // True when the file at "to" exists and was written more than 2 s after the one at "from".
+        static bool IsNewer(string to, string from)
+        {
+            var target = new FileInfo(to);
+            if (!target.Exists) return false;
+            return (target.LastWriteTimeUtc - new FileInfo(from).LastWriteTimeUtc).TotalSeconds > 2;
         }
 
         static bool AlreadyCopied(string from, string to, long length)

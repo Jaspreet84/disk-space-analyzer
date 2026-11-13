@@ -161,6 +161,7 @@ namespace DiskSpace
             }
 
             busy = true;
+            CancelCoverage();
             pageBeforeScan = currentPage == scanPage ? homePage : currentPage;
             expectedBytes = 0;
             ulong available, total, free;
@@ -183,17 +184,24 @@ namespace DiskSpace
             ScanResult r = null;
             List<Insight> found = null;
             MovePlan plan = null;
+            List<DriveProfile> drives = null;
             Exception failure = null;
             try
             {
                 r = await Task.Run(() =>
                 {
                     ScanResult x = sc.Scan(path, token);
-                    if (x != null) x.Analyze();
+                    if (x != null)
+                    {
+                        // The drive list is loaded here (not in MovePlan.For) so Protect knows which drives are external.
+                        drives = Drives.Load();
+                        x.Protect = ProtectContextFor(path, drives);
+                        x.Analyze();
+                    }
                     return x;
                 });
                 if (r != null) found = await Task.Run(() => Insights.Find(r, elevated));
-                if (r != null) plan = await Task.Run(() => MovePlan.For(r));
+                if (r != null) plan = await Task.Run(() => MovePlan.For(r, drives));
             }
             catch (Exception ex) { failure = ex; }
             progressTimer.Stop();
@@ -206,6 +214,7 @@ namespace DiskSpace
             {
                 SetNavEnabled(true);
                 Navigate(pageBeforeScan);
+                if (result != null) StartCoverage();  // the earlier scan's check was stopped when this one began
                 if (failure != null) ShowError("The scan failed. " + failure.Message);
                 else Toast("Scan stopped", "");
                 return;
@@ -221,6 +230,9 @@ namespace DiskSpace
             fileFilter = -1;
             filesSearch.Text = "";
             SetNavEnabled(true);
+            coverage = null;
+            ForgetAllCopies();
+            StartCoverage();
             RefreshAll();
             Navigate(overviewPage);
             EventHandler h = ScanCompleted;

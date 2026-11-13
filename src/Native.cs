@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace DiskSpace
@@ -155,5 +156,79 @@ namespace DiskSpace
 
         [DllImport("user32.dll")]
         public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+
+        public const uint NameSurrogateTag = 0x20000000;  // set on junctions, mount points and symbolic links
+
+        // True when the folder at path is a junction, mount point or symbolic link: a name-surrogate reparse
+        // point, the kind the scanner does not follow. Reads only the folder's own directory entry.
+        public static bool IsNameSurrogate(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            string p = path.Length > 3 ? path.TrimEnd('\\') : path;
+            if (p.Length <= 3) return false;  // a drive root has no entry of its own
+            WIN32_FIND_DATA fd;
+            IntPtr h = FindFirstFileExW(Scanner.LongPath(p), FindExInfoBasic, out fd, 0, IntPtr.Zero, 0);
+            if (h == INVALID_HANDLE_VALUE) return false;
+            FindClose(h);
+            return (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && (fd.dwReserved0 & NameSurrogateTag) != 0;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        static extern uint QueryDosDeviceW(string lpDeviceName, System.Text.StringBuilder lpTargetPath, int ucchMax);
+
+        // True for a drive letter made with SUBST (or DefineDosDevice): an alias for a folder on another drive,
+        // which Windows reports as a "\??\C:\folder" target. Such a letter is not a drive of its own.
+        public static bool IsSubstDrive(string root)
+        {
+            if (string.IsNullOrEmpty(root) || root.Length < 2 || root[1] != ':') return false;
+            try
+            {
+                var sb = new System.Text.StringBuilder(1024);
+                if (QueryDosDeviceW(root.Substring(0, 2), sb, sb.Capacity) == 0) return false;
+                return sb.ToString().StartsWith(@"\??\", StringComparison.Ordinal);
+            }
+            catch (DllNotFoundException) { return false; }
+            catch (EntryPointNotFoundException) { return false; }
+        }
+    }
+
+    // The shell's known folders, which can be moved away from the user folder (Downloads on another drive,
+    // Documents redirected into OneDrive). Each getter falls back to the usual folder under the profile.
+    static class KnownFolders
+    {
+        public static readonly Guid DownloadsId = new Guid("374DE290-123F-4565-9164-39C4925E467B");
+        public static readonly Guid DesktopId = new Guid("B4BFCC3A-DB2C-424C-B029-7FE99A87C641");
+        public static readonly Guid DocumentsId = new Guid("FDD39AD0-238F-46AF-ADB4-6C85480369C7");
+        public static readonly Guid PicturesId = new Guid("33E28130-4E1E-4676-835A-98395C3BC3BB");
+        public static readonly Guid VideosId = new Guid("18989B1D-99B5-455B-841C-AB7C74E4DDFC");
+        public static readonly Guid MusicId = new Guid("4BD8D571-6D19-48D3-BE97-422220080E43");
+
+        [DllImport("shell32.dll", ExactSpelling = true)]
+        static extern int SHGetKnownFolderPath([In] ref Guid rfid, uint dwFlags, IntPtr hToken,
+            [MarshalAs(UnmanagedType.LPWStr)] out string ppszPath);
+
+        public static string Get(Guid id, string fallback)
+        {
+            try
+            {
+                string path;
+                if (SHGetKnownFolderPath(ref id, 0, IntPtr.Zero, out path) == 0 && !string.IsNullOrEmpty(path)) return path;
+            }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+            return fallback;
+        }
+
+        static string Under(string leaf)
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), leaf);
+        }
+
+        public static string Downloads() { return Get(DownloadsId, Under("Downloads")); }
+        public static string Desktop() { return Get(DesktopId, Under("Desktop")); }
+        public static string Documents() { return Get(DocumentsId, Under("Documents")); }
+        public static string Pictures() { return Get(PicturesId, Under("Pictures")); }
+        public static string Videos() { return Get(VideosId, Under("Videos")); }
+        public static string Music() { return Get(MusicId, Under("Music")); }
     }
 }

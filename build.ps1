@@ -17,7 +17,7 @@ if (-not (Test-Path $csc)) { throw 'The .NET Framework 4.x C# compiler (csc.exe)
 
 New-Item -ItemType Directory -Force $bin, $obj | Out-Null
 
-$common = 'Native.cs', 'Model.cs', 'Scanner.cs', 'Placement.cs', 'Protect.cs', 'AppIcon.cs', 'Program.cs' | ForEach-Object { Join-Path $src $_ }
+$common = 'Native.cs', 'Model.cs', 'Scanner.cs', 'Placement.cs', 'Protect.cs', 'ProtectContext.cs', 'ProtectNames.cs', 'ProtectCoverage.cs', 'AppIcon.cs', 'Program.cs' | ForEach-Object { Join-Path $src $_ }
 $options = @('/nologo', '/optimize+', '/codepage:65001', '/platform:anycpu', "/win32manifest:$src\app.manifest",
              '/r:System.dll', '/r:System.Core.dll', '/r:System.Drawing.dll', '/r:System.Management.dll')
 

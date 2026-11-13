@@ -106,10 +106,21 @@ Nothing is suggested if the target would drop below 10% free.
 
 ## Protect, and the trust checks
 
-Protect is a page in progress. It will show which files would hurt if they leaked (credential files and secrets in text) and which would hurt if a drive died (personal data with one copy). This build has the ground rules the rest is built on:
+The Protect page shows which files would hurt if they leaked and which would hurt if a drive died. It works from file names, folders, sizes and dates only: it does not open your files.
+
+- **Keys and sign-ins.** It finds about 30 kinds of credential file by name and place: SSH and PuTTY keys, private key files, `.pfx` certificates, password vaults and exported passwords, cloud and developer tool sign-ins (AWS, Azure, Google Cloud, GitHub CLI, Kubernetes, Docker, npm, PyPI, .NET user secrets, Terraform), `.env` files, crypto wallets and recovery codes. A file where its tool keeps it is listed in a collapsed "In their usual places" group and not counted. A copy in Downloads, on the Desktop, in a synced folder or on an external drive is listed for review.
+- **Personal documents.** Tax forms, bank statements, payslips and ID documents, matched by name with guards against look-alikes (a camera photo named `t4-...jpg` is not a tax slip).
+- **Copies of your folders.** For Documents, Pictures, large photo and backup folders, and folders holding personal documents, it checks whether a copy with the same files and sizes exists on another connected drive. A synced cloud folder is shown as synced, never counted as a copy. Folders with one copy get a "Copy to…" button that uses the Move page's checked copy.
+- **Hide and trust.** Hide a finding or trust a folder; both can be undone, and only a hash of each is kept.
+- **Not yet:** reading file contents for secrets (stage 2, off until you turn it on), and git status for files inside projects (stage 3). `.env` files in projects are listed separately and not counted until then.
+
+`dsa <path> --protect [--all] [--coverage]` prints the same findings in a terminal.
+
+The rules the page is built on are enforced by the build:
 
 - **No network code.** The app contains none; it is not switched off, it is absent. The build fails if either program names a `System.Net` type or references a `System.Net` assembly.
 - **Protect never writes a file.** The Protect source files may not call anything that writes, deletes or moves, except the two marked lines that save its own settings file. The build checks this too.
+- **Protect never reads a file's contents.** The Protect source files may not call anything that reads a file, except the one marked line that loads its own settings file. The build checks this too.
 - **A finding has no room for a value.** The `Finding` type holds a pattern id, a path, a line and column, and a place. The tests check the field list.
 - **Settings hold no paths in clear.** `%LOCALAPPDATA%\DiskSpaceAnalyzer\protect.json` keeps the content-scan switch and a hash per dismissed finding and trusted folder, nothing else.
 - **The app explains itself from its own code.** The Protect page's "What Protect reads" is generated from the same constants the scanner uses, so it describes the build you are running. `dsa --protect-info` prints the same text.
@@ -122,7 +133,7 @@ powershell -ExecutionPolicy Bypass -File tools\check-trust.ps1
 
 It compiles a small checker (`tools\CheckTrust.cs`) that reads each program's metadata and lists every `System.Net` name it finds. To see the same thing from the outside, open Resource Monitor's Network tab while a scan runs: the app never appears.
 
-To run the tests, which also plant a network call and a file write to confirm the checks catch them:
+To run the tests, which also plant network calls, file writes and file reads to confirm the checks catch them, and measure every matcher against the 192 cases in `tests\protect-corpus`:
 
 ```
 powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1
@@ -131,7 +142,7 @@ powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ## Command-line version
 
 ```
-dsa <drive or folder> [--depth N] [--top N] [--csv file.csv] [--moves]
+dsa <drive or folder> [--depth N] [--top N] [--csv file.csv] [--moves] [--protect [--all] [--coverage]]
 ```
 
 For example, `dsa C: --depth 3 --top 15` lists the largest folders three levels deep. It also lists the largest files, space per category and the top extensions. Use `--csv` to write every folder to a file. `--moves` lists your drives and the Move page's suggestions instead.

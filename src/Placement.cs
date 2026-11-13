@@ -19,6 +19,8 @@ namespace DiskSpace
         public bool IsSsd, IsHdd;
         public long Total, Free;
         public long Promised;        // bytes already suggested for this drive
+        public int DiskNumber = -1;  // the physical disk this drive is on, or -1 when Windows Storage Management did not say
+        public bool FileBacked;      // a virtual disk (VHD or VHDX) mounted from a file, which lives on another drive
 
         public string Letter
         {
@@ -81,6 +83,7 @@ namespace DiskSpace
                 {
                     if (!d.IsReady || (d.DriveType != DriveType.Fixed && d.DriveType != DriveType.Removable)) continue;
                     if (d.TotalSize < (8L << 30)) continue;  // card readers, small virtual disks
+                    if (Native.IsSubstDrive(d.Name)) continue;  // a SUBST letter is a folder on another drive, not a drive
                     var p = new DriveProfile
                     {
                         Root = d.Name.ToUpperInvariant(),
@@ -92,12 +95,14 @@ namespace DiskSpace
                     int disk, bus = 0, media = 0;
                     if (diskOf.TryGetValue(char.ToUpperInvariant(d.Name[0]), out disk))
                     {
+                        p.DiskNumber = disk;
                         busOf.TryGetValue(disk, out bus);
                         mediaOf.TryGetValue(disk, out media);
                     }
                     bool external = d.DriveType == DriveType.Removable || bus == 7 || bus == 12 || bus == 13 || bus == 4;  // USB, SD, MMC, 1394
                     p.IsSsd = media == 4 || bus == 17;  // SSD media, or NVMe
                     p.IsHdd = media == 3;
+                    p.FileBacked = bus == 15;  // BusType FileBackedVirtual
                     p.Role = string.Equals(p.Root, systemRoot, StringComparison.OrdinalIgnoreCase) ? DriveRole.System
                         : external ? DriveRole.External : DriveRole.Storage;
                     drives.Add(p);
@@ -169,6 +174,8 @@ namespace DiskSpace
         public string Distro;          // for WslMove
         public bool CanMoveInstead;    // a Copy suggestion that may also be moved
         public bool AlreadyCopied;     // an identical copy is already at the destination
+        public bool UpdateExisting;    // the destination is an existing copy that differs; it is updated in place
+        public long ExistingBytes;     // with UpdateExisting: what the copy already holds, for the free-space check
 
         public string KindName
         {
@@ -264,8 +271,17 @@ namespace DiskSpace
                 }
             }
 
-            // Backups and photo or video collections.
-            WalkFolders(r, r.Root, 0, from, storage, external, found, taken);
+            // Backups and photo or video collections. A folder that gets a suggestion covers everything inside it,
+            // and so does a folder already taken by a suggestion above.
+            var suggested = new HashSet<DirNode>();
+            foreach (DirNode d in PersonalCandidates(r))
+            {
+                if (CoveredAbove(d, r.Root, taken, suggested)) continue;
+                MoveSuggestion s = ForArchiveFolder(d, LooksLikeBackup(d.Name) ? MoveKind.Backup : MoveKind.Media, from, storage, external);
+                if (s == null) continue;
+                Add(found, taken, s);
+                suggested.Add(d);
+            }
 
             // Installer images and old installers: needed rarely, and can be downloaded again.
             DriveProfile archive = external ?? (from.Role == DriveRole.System ? storage : null);
@@ -290,13 +306,23 @@ namespace DiskSpace
             return found;
         }
 
-        static void WalkFolders(ScanResult r, DirNode dir, int depth, DriveProfile from, DriveProfile storage, DriveProfile external,
-            List<MoveSuggestion> found, HashSet<Node> taken)
+        // Folders of 1 GB or more that look like a backup or are mostly photos, videos and music, to six levels
+        // below the scan root, in the order a depth-first walk meets them. Nested ones are included too: Suggest
+        // skips those inside a folder it already suggested, and the Protect page keeps only the outermost.
+        // System areas, AppData, "$" folders and OneDrive folders are left out, with everything inside them.
+        internal static List<DirNode> PersonalCandidates(ScanResult r)
+        {
+            var found = new List<DirNode>();
+            if (r != null && r.Root != null) WalkFolders(r, r.Root, 0, found);
+            return found;
+        }
+
+        static void WalkFolders(ScanResult r, DirNode dir, int depth, List<DirNode> found)
         {
             foreach (Node child in dir.Children)
             {
                 var d = child as DirNode;
-                if (d == null || d.Unaccounted || d.Size < GB || taken.Contains(d)) continue;
+                if (d == null || d.Unaccounted || d.Size < GB) continue;
                 if (d.Name.StartsWith("$", StringComparison.Ordinal) || InSystemArea(d, r) ||
                     d.Name.Equals("AppData", StringComparison.OrdinalIgnoreCase) || d.Name.StartsWith("OneDrive", StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -304,18 +330,18 @@ namespace DiskSpace
                 bool backup = LooksLikeBackup(d.Name);
                 long[] bytes = r.CategoryBytesUnder(d);
                 long media = bytes[(int)Category.Video] + bytes[(int)Category.Images] + bytes[(int)Category.Audio];
-                bool mediaFolder = media >= d.Size * 0.8;
-                if (backup || mediaFolder)
-                {
-                    MoveSuggestion s = ForArchiveFolder(d, backup ? MoveKind.Backup : MoveKind.Media, from, storage, external);
-                    if (s != null)
-                    {
-                        Add(found, taken, s);
-                        continue;
-                    }
-                }
-                if (depth < 6) WalkFolders(r, d, depth + 1, from, storage, external, found, taken);
+                if (backup || media >= d.Size * 0.8) found.Add(d);
+                if (depth < 6) WalkFolders(r, d, depth + 1, found);
             }
+        }
+
+        // The folder, or a folder it is in (below the scan root), is taken by a suggestion, or already got a
+        // backup or media suggestion of its own. The old recursive walk stopped at exactly these folders.
+        static bool CoveredAbove(DirNode d, DirNode root, HashSet<Node> taken, HashSet<DirNode> suggested)
+        {
+            for (DirNode p = d; p != null && p != root; p = p.Parent)
+                if (taken.Contains(p) || (p != d && suggested.Contains(p))) return true;
+            return false;
         }
 
         // Personal files you can't download again. On the system drive they move to internal storage; from internal
@@ -400,6 +426,8 @@ namespace DiskSpace
         }
 
         // Same file count and total size: a quick check that a copy is complete. Verifying compares the bytes.
+        // Folders compare their logical bytes (full file lengths), since compressed files and cloud placeholders
+        // take less space here than their copies do. After a flagged file was removed the total is not known.
         static bool IsSameContent(Node item, string copy)
         {
             try
@@ -407,6 +435,7 @@ namespace DiskSpace
                 var file = item as FileNode;
                 if (file != null) return new FileInfo(Scanner.LongPath(copy)).Length == file.Size;
                 var dir = (DirNode)item;
+                if (dir.LogicalStale) return false;
                 long count = 0, bytes = 0;
                 foreach (string f in Directory.EnumerateFiles(Scanner.LongPath(copy), "*", SearchOption.AllDirectories))
                 {
@@ -414,7 +443,7 @@ namespace DiskSpace
                     bytes += new FileInfo(f).Length;
                     if (count > dir.FileCount) return false;
                 }
-                return count == dir.FileCount && bytes == dir.Size;
+                return count == dir.FileCount && bytes == dir.LogicalBytes;
             }
             catch (IOException) { return false; }
             catch (UnauthorizedAccessException) { return false; }
@@ -434,6 +463,12 @@ namespace DiskSpace
             for (Node p = n; p != null; p = p.Parent)
                 if (taken.Contains(p)) return true;
             return false;
+        }
+
+        // For the Protect page's backup probes, which take the test as a Func<string, bool>.
+        internal static bool IsBackupName(string name)
+        {
+            return !string.IsNullOrEmpty(name) && LooksLikeBackup(name);
         }
 
         static bool LooksLikeBackup(string name)
@@ -499,18 +534,90 @@ namespace DiskSpace
             return map;
         }
 
-        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-        static extern int SHGetKnownFolderPath([In] ref Guid rfid, uint flags, IntPtr token, [MarshalAs(UnmanagedType.LPWStr)] out string path);
-
+        // The folders Windows can move as a whole, where they are now (they may already be redirected).
         static IEnumerable<string> PersonalFolders()
         {
-            Guid downloads = new Guid("374DE290-123F-4565-9164-39C4925E467B");
-            string path;
-            if (SHGetKnownFolderPath(ref downloads, 0, IntPtr.Zero, out path) == 0 && !string.IsNullOrEmpty(path)) yield return path;
-            yield return Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
-            yield return Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
-            yield return Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
-            yield return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            yield return KnownFolders.Downloads();
+            yield return KnownFolders.Videos();
+            yield return KnownFolders.Pictures();
+            yield return KnownFolders.Music();
+            yield return KnownFolders.Documents();
+            yield return KnownFolders.Desktop();
+        }
+
+        // The drives in the form the Protect page's backup check takes, so ProtectCoverage needs no Placement types.
+        internal static List<CoverageDrive> CoverageDrives(List<DriveProfile> drives)
+        {
+            var list = new List<CoverageDrive>();
+            if (drives == null) return list;
+            foreach (DriveProfile d in drives)
+                {
+                // A virtual disk mounted from a file fails with the drive that holds the file, so a copy on it
+                // is not a second copy.
+                if (d.FileBacked) continue;
+                list.Add(new CoverageDrive { Root = d.Root, Label = d.Label, External = d.Role == DriveRole.External, DiskNumber = d.DiskNumber, Total = d.Total });
+            }
+            return list;
+        }
+
+        // The roots of the external drives ("F:\"), for ProtectContext's ExternalDrive place.
+        internal static string[] ExternalRoots(List<DriveProfile> drives)
+        {
+            var roots = new List<string>();
+            if (drives != null)
+                foreach (DriveProfile d in drives)
+                    if (d.Role == DriveRole.External) roots.Add(d.Root);
+            return roots.ToArray();
+        }
+
+        // Where a second copy of a folder is best kept: an external drive first, then an internal storage drive,
+        // never the drive it is on, nor another partition of the same disk when both disk numbers are known.
+        // The one with the most room wins within a role. Null when there is none.
+        internal static DriveProfile BestCopyTarget(List<DriveProfile> drives, DriveProfile from)
+        {
+            if (drives == null) return null;
+            foreach (DriveRole role in new[] { DriveRole.External, DriveRole.Storage })
+            {
+                DriveProfile best = null;
+                foreach (DriveProfile d in drives)
+                {
+                    if (d.Role != role || d == from || d.FileBacked) continue;
+                    if (from != null)
+                    {
+                        if (string.Equals(d.Root, from.Root, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (d.DiskNumber >= 0 && from.DiskNumber >= 0 && d.DiskNumber == from.DiskNumber) continue;
+                    }
+                    if (best == null || d.Available > best.Available) best = d;
+                }
+                if (best != null) return best;
+            }
+            return null;
+        }
+
+        // A suggestion to copy one folder to another drive, for the Protect page's "Copy to F:" button. It goes to
+        // the same place a Move page copy would, and when an identical copy is already there it is marked as copied,
+        // so running it checks that copy instead. Nothing is copied here.
+        //
+        // With existing (a copy Protect already found on the target drive), the suggestion points at that folder
+        // instead and nothing is listed: identical marks it as copied, so running it checks the copy; otherwise it
+        // updates the copy in place (UpdateExisting), which keeps any file that is newer in the copy unless the
+        // user chooses to replace it.
+        internal static MoveSuggestion ForCopy(DirNode d, DriveProfile target, string existing = null, bool identical = false)
+        {
+            if (d == null || target == null) return null;
+            MoveSuggestion s = Make(d, LooksLikeBackup(d.Name) ? MoveKind.Backup : MoveKind.PersonalFolder, MoveAction.Copy, null, target,
+                existing ?? Path.Combine(target.Root, d.Name),
+                "Copying this folder to " + target.Letter + " gives you a second copy on a separate drive. " +
+                "Keep the original too, so one failed drive can't lose it.");
+            if (existing != null)
+            {
+                s.Destination = existing;
+                s.AlreadyCopied = identical;
+                s.UpdateExisting = !identical;
+                return s;
+            }
+            s.Destination = FreeDestination(s);
+            return s;
         }
     }
 }

@@ -661,8 +661,284 @@
           <StackPanel Margin="40,32,40,32">
             <TextBlock Style="{StaticResource Title}" Text="Protect"/>
             <TextBlock Style="{StaticResource BodySecondary}" Margin="0,6,0,0" MaxWidth="760" HorizontalAlignment="Left"
-                       Text="Protect will show which files would hurt if they leaked and which would hurt if a drive died. This build has the ground rules; findings arrive in the next stage. Everything below is generated from the program itself, so it describes this build, not a plan."/>
-            <TextBlock Style="{StaticResource SectionHeader}" Margin="0,28,0,12" Text="What Protect reads"/>
+                       Text="Protect looks at file names, folders, sizes and dates to show where sign-in keys and personal papers are, and whether your large folders have a copy on another drive. It does not open your files, and nothing leaves this PC."/>
+
+            <!-- Before a scan -->
+            <Border x:Name="ProtectNoScan" Style="{StaticResource Card}" Margin="0,24,0,0" Padding="20,18">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Border Width="40" Height="40" CornerRadius="8" Background="{DynamicResource AccentTint}" VerticalAlignment="Center">
+                  <TextBlock Style="{StaticResource Icon}" Text="&#xE72E;" FontSize="18" Foreground="{DynamicResource AccentText}" HorizontalAlignment="Center"/>
+                </Border>
+                <TextBlock Grid.Column="1" Margin="16,0,24,0" Style="{StaticResource BodySecondary}" VerticalAlignment="Center"
+                           Text="Scan a drive or folder to see what Protect finds. Scanning C: covers your user folder."/>
+                <Button x:Name="ProtectScanButton" Grid.Column="2" Style="{StaticResource AccentButton}" Tag="protect-scan" Content="Scan C:" MinWidth="120" VerticalAlignment="Center"/>
+              </Grid>
+            </Border>
+
+            <StackPanel x:Name="ProtectResults" Visibility="Collapsed">
+              <!-- Summary strip -->
+              <Border Style="{StaticResource Card}" Margin="0,24,0,0" Padding="24,22">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="150"/>
+                  </Grid.ColumnDefinitions>
+                  <StackPanel>
+                    <TextBlock Style="{StaticResource Caption}" FontSize="14" Text="To review"/>
+                    <TextBlock x:Name="ProtectToReview" Style="{StaticResource Hero}" Margin="0,2,0,0"/>
+                    <TextBlock x:Name="ProtectNote" Style="{StaticResource Caption}" Margin="0,4,24,0" TextWrapping="Wrap"/>
+                  </StackPanel>
+                  <Rectangle Grid.Column="1" Width="1" Fill="{DynamicResource Divider}" Margin="8,4,32,4"/>
+                  <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <TextBlock Style="{StaticResource Caption}" Text="Keys and sign-ins" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="ProtectKeys" Style="{StaticResource StatValue}"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="3" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <TextBlock Style="{StaticResource Caption}" Text="Personal documents" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="ProtectDocs" Style="{StaticResource StatValue}"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="4" VerticalAlignment="Center">
+                    <TextBlock Style="{StaticResource Caption}" Text="Without a current copy" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="ProtectNoCopy" Style="{StaticResource StatValue}"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+              <StackPanel x:Name="ProtectCoverageBusy" Margin="0,10,0,0" Visibility="Collapsed">
+                <ProgressBar Style="{StaticResource ThinProgress}" IsIndeterminate="True"/>
+                <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" Text="Checking other drives…"/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource Caption}" Margin="0,10,0,0" TextWrapping="Wrap" MaxWidth="760" HorizontalAlignment="Left"
+                         Text="Confirmed means Protect is sure what kind of file it is. Likely means the name and place strongly suggest it. Neither means something is wrong."/>
+
+              <TextBlock x:Name="ProtectEmpty" Style="{StaticResource BodySecondary}" Margin="0,20,0,0" Visibility="Collapsed"/>
+
+              <!-- Findings, grouped into cards -->
+              <ItemsControl x:Name="ProtectFindings" Margin="0,16,0,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12" Padding="20,18">
+                      <StackPanel>
+                        <Grid>
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                          </Grid.ColumnDefinitions>
+                          <Border Width="40" Height="40" CornerRadius="8" Background="{DynamicResource AccentTint}" VerticalAlignment="Top">
+                            <TextBlock Style="{StaticResource Icon}" Text="{Binding Glyph}" FontSize="18" Foreground="{DynamicResource AccentText}" HorizontalAlignment="Center"/>
+                          </Border>
+                          <StackPanel Grid.Column="1" Margin="16,0,24,0">
+                            <TextBlock Text="{Binding Title}" Style="{StaticResource BodyStrong}" FontSize="15" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding Reason}" Style="{StaticResource BodySecondary}" FontSize="13" Margin="0,3,0,0"/>
+                            <ItemsControl ItemsSource="{Binding Lines}" Visibility="{Binding LinesVisibility}" Margin="0,2,0,0">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                  <TextBlock Text="{Binding}" Style="{StaticResource BodySecondary}" FontSize="13" Margin="0,3,0,0"/>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <ItemsControl ItemsSource="{Binding Chips}" Visibility="{Binding ChipsVisibility}" Margin="0,8,0,0">
+                              <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                              </ItemsControl.ItemsPanel>
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                  <Border x:Name="Chip" Style="{StaticResource Tag}" BorderThickness="1" BorderBrush="Transparent">
+                                    <StackPanel Orientation="Horizontal">
+                                      <TextBlock x:Name="ChipIcon" Style="{StaticResource Icon}" FontSize="11" Margin="0,0,5,0" Visibility="Collapsed"/>
+                                      <TextBlock Text="{Binding Text}" FontSize="12"/>
+                                    </StackPanel>
+                                  </Border>
+                                  <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding Variant}" Value="warn">
+                                      <Setter TargetName="ChipIcon" Property="Visibility" Value="Visible"/>
+                                      <Setter TargetName="ChipIcon" Property="Text" Value="&#xE7BA;"/>
+                                      <Setter TargetName="ChipIcon" Property="Foreground" Value="{DynamicResource Warning}"/>
+                                      <Setter TargetName="Chip" Property="BorderBrush" Value="{DynamicResource Warning}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Variant}" Value="good">
+                                      <Setter TargetName="ChipIcon" Property="Visibility" Value="Visible"/>
+                                      <Setter TargetName="ChipIcon" Property="Text" Value="&#xE73E;"/>
+                                      <Setter TargetName="ChipIcon" Property="Foreground" Value="{DynamicResource Good}"/>
+                                    </DataTrigger>
+                                  </DataTemplate.Triggers>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="{Binding Path}" ToolTip="{Binding Path}" Visibility="{Binding PathVisibility}" Style="{StaticResource Caption}"
+                                       TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
+                            <ToggleButton x:Name="ShowItems" Margin="0,8,0,0" HorizontalAlignment="Left" Visibility="{Binding ItemsVisibility}"
+                                          IsChecked="{Binding Expanded, Mode=TwoWay}">
+                              <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                  <StackPanel Orientation="Horizontal" Background="Transparent" Cursor="Hand">
+                                    <TextBlock Text="{Binding ItemsLabel}" Foreground="{DynamicResource AccentText}" FontSize="13"/>
+                                    <TextBlock x:Name="Chevron" Style="{StaticResource Icon}" Text="&#xE70D;" FontSize="10" Margin="6,1,0,0" Foreground="{DynamicResource AccentText}"/>
+                                  </StackPanel>
+                                  <ControlTemplate.Triggers>
+                                    <Trigger Property="IsChecked" Value="True">
+                                      <Setter TargetName="Chevron" Property="Text" Value="&#xE70E;"/>
+                                    </Trigger>
+                                  </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                              </ToggleButton.Template>
+                            </ToggleButton>
+                          </StackPanel>
+                          <StackPanel Grid.Column="2" HorizontalAlignment="Right" Visibility="{Binding ActionsVisibility}">
+                            <Button Content="{Binding PrimaryText}" Tag="{Binding PrimaryTag}" MinWidth="150"/>
+                            <Button Content="Show in Explorer" Tag="protect-show" Style="{StaticResource LinkButton}" FontSize="13"
+                                    HorizontalAlignment="Right" Margin="0,8,0,0" Visibility="{Binding ShowLinkVisibility}"/>
+                            <Button Content="Hide" Tag="protect-dismiss" Style="{StaticResource SubtleButton}" MinWidth="150" Margin="0,8,0,0"
+                                    ToolTip="Hide from this list. The file is not changed."/>
+                            <Button Content="Trust this folder" Tag="protect-trust" Style="{StaticResource LinkButton}" FontSize="13"
+                                    HorizontalAlignment="Right" Margin="0,8,0,0"/>
+                          </StackPanel>
+                        </Grid>
+                        <ItemsControl ItemsSource="{Binding Items}" Margin="56,12,0,0"
+                                      Visibility="{Binding IsChecked, ElementName=ShowItems, Converter={StaticResource BoolToVisibility}}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                              <Grid Margin="0,3" Background="Transparent">
+                                <Grid.ColumnDefinitions>
+                                  <ColumnDefinition Width="26"/>
+                                  <ColumnDefinition Width="*"/>
+                                  <ColumnDefinition Width="86"/>
+                                  <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Image Source="{Binding Icon}" Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,2,0,0"/>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                  <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                  <TextBlock Text="{Binding Kind}" Style="{StaticResource Caption}" TextWrapping="Wrap"/>
+                                  <TextBlock Text="{Binding Folder}" ToolTip="{Binding Folder}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                                <TextBlock Grid.Column="2" Text="{Binding SizeText}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                                  <Button Content="Trust this project" Tag="item-trust" Style="{StaticResource LinkButton}" FontSize="13"
+                                          Margin="0,0,10,0" Visibility="{Binding TrustVisibility}"/>
+                                  <Button Style="{StaticResource IconButton}" Content="&#xE8E5;" Tag="item-open" ToolTip="Open"
+                                          Width="32" Height="32" Visibility="{Binding OpenVisibility}"/>
+                                  <Button Style="{StaticResource IconButton}" Content="&#xEC50;" Tag="item-show" ToolTip="Show in Explorer" Width="32" Height="32"/>
+                                </StackPanel>
+                              </Grid>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <!-- Hidden by you -->
+              <StackPanel x:Name="ProtectHiddenLine" Orientation="Horizontal" Margin="0,4,0,0" Visibility="Collapsed">
+                <TextBlock x:Name="ProtectHiddenText" Style="{StaticResource BodySecondary}" FontSize="13" TextWrapping="NoWrap" VerticalAlignment="Center"/>
+                <Button x:Name="ProtectShowHidden" Style="{StaticResource LinkButton}" FontSize="13" Margin="8,0,0,0" Content="Show hidden" VerticalAlignment="Center"/>
+              </StackPanel>
+              <StackPanel x:Name="ProtectHiddenPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                <Border Style="{StaticResource Card}" Padding="20,10">
+                  <ItemsControl x:Name="ProtectHiddenList">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Grid Margin="0,6">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                          </Grid.ColumnDefinitions>
+                          <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="{Binding Kind}" Style="{StaticResource BodyStrong}" FontSize="13"/>
+                            <TextBlock Text="{Binding Path}" ToolTip="{Binding Path}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding Note}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis"/>
+                          </StackPanel>
+                          <Button Grid.Column="1" Content="Show again" Tag="hidden-show" Style="{StaticResource SubtleButton}" VerticalAlignment="Center"/>
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </Border>
+                <TextBlock Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap" MaxWidth="760" HorizontalAlignment="Left"
+                           Text="Hidden items that are no longer found stay hidden in protect.json; they cannot be listed because only their hash is kept."/>
+              </StackPanel>
+
+              <!-- Copies of your folders -->
+              <TextBlock Style="{StaticResource SectionHeader}" Margin="0,32,0,6" Text="Copies of your folders"/>
+              <TextBlock x:Name="ProtectCoverageHeadline" Style="{StaticResource BodyStrong}" FontSize="15" TextWrapping="Wrap" MaxWidth="760" HorizontalAlignment="Left"/>
+              <TextBlock x:Name="ProtectCoverageNote" Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+              <ItemsControl x:Name="ProtectCoverage" Margin="0,14,0,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,12" Padding="20,18">
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto"/>
+                          <ColumnDefinition Width="*"/>
+                          <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Width="40" Height="40" CornerRadius="8" Background="{DynamicResource AccentTint}" VerticalAlignment="Top">
+                          <TextBlock Style="{StaticResource Icon}" Text="&#xE8B7;" FontSize="18" Foreground="{DynamicResource AccentText}" HorizontalAlignment="Center"/>
+                        </Border>
+                        <StackPanel Grid.Column="1" Margin="16,0,24,0">
+                          <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" FontSize="15" TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
+                          <TextBlock Text="{Binding Why}" Style="{StaticResource Caption}" Margin="0,1,0,0"/>
+                          <ItemsControl ItemsSource="{Binding Chips}" Margin="0,8,0,0">
+                            <ItemsControl.ItemsPanel>
+                              <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                <Border x:Name="Chip" Style="{StaticResource Tag}" BorderThickness="1" BorderBrush="Transparent">
+                                  <StackPanel Orientation="Horizontal">
+                                    <TextBlock x:Name="ChipIcon" Style="{StaticResource Icon}" FontSize="11" Margin="0,0,5,0" Visibility="Collapsed"/>
+                                    <TextBlock Text="{Binding Text}" FontSize="12"/>
+                                  </StackPanel>
+                                </Border>
+                                <DataTemplate.Triggers>
+                                  <DataTrigger Binding="{Binding Variant}" Value="warn">
+                                    <Setter TargetName="ChipIcon" Property="Visibility" Value="Visible"/>
+                                    <Setter TargetName="ChipIcon" Property="Text" Value="&#xE7BA;"/>
+                                    <Setter TargetName="ChipIcon" Property="Foreground" Value="{DynamicResource Warning}"/>
+                                    <Setter TargetName="Chip" Property="BorderBrush" Value="{DynamicResource Warning}"/>
+                                  </DataTrigger>
+                                  <DataTrigger Binding="{Binding Variant}" Value="good">
+                                    <Setter TargetName="ChipIcon" Property="Visibility" Value="Visible"/>
+                                    <Setter TargetName="ChipIcon" Property="Text" Value="&#xE73E;"/>
+                                    <Setter TargetName="ChipIcon" Property="Foreground" Value="{DynamicResource Good}"/>
+                                  </DataTrigger>
+                                </DataTemplate.Triggers>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                          <ItemsControl ItemsSource="{Binding Lines}" Margin="0,2,0,0">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                <TextBlock Text="{Binding}" Style="{StaticResource BodySecondary}" FontSize="13" Margin="0,3,0,0"/>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" HorizontalAlignment="Right">
+                          <Button Content="{Binding AccentText}" Tag="cov-copy" Style="{StaticResource AccentButton}" MinWidth="170" Visibility="{Binding AccentVisibility}"/>
+                          <Button Content="{Binding PlainText}" Tag="cov-check" MinWidth="170" Visibility="{Binding PlainVisibility}"/>
+                          <Button Content="Show in Explorer" Tag="cov-show" Style="{StaticResource LinkButton}" FontSize="13" HorizontalAlignment="Right" Margin="0,10,0,0"/>
+                        </StackPanel>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0" TextWrapping="Wrap" MaxWidth="760" HorizontalAlignment="Left"
+                         Text="Checked: Documents, Desktop, Pictures, Videos, Music, large photo and backup folders, and folders with personal documents. Downloads is not included. Compared by file count and total size; nothing is opened. A drive that is not connected counts as no copy."/>
+            </StackPanel>
+
+            <TextBlock Style="{StaticResource SectionHeader}" Margin="0,32,0,12" Text="What Protect reads"/>
             <StackPanel x:Name="ProtectInfo"/>
           </StackPanel>
         </ScrollViewer>
@@ -776,10 +1052,10 @@
       <Border.Effect>
         <DropShadowEffect BlurRadius="18" ShadowDepth="4" Direction="270" Opacity="0.25"/>
       </Border.Effect>
-      <StackPanel Orientation="Horizontal">
-        <TextBlock x:Name="ToastIcon" Style="{StaticResource Icon}" Foreground="{DynamicResource ToastText}" Text="&#xE73E;"/>
+      <DockPanel LastChildFill="True">
+        <TextBlock x:Name="ToastIcon" DockPanel.Dock="Left" Style="{StaticResource Icon}" Foreground="{DynamicResource ToastText}" Text="&#xE73E;"/>
         <TextBlock x:Name="ToastText" Foreground="{DynamicResource ToastText}" Margin="12,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-      </StackPanel>
+      </DockPanel>
     </Border>
 
     <!-- Dialogs -->

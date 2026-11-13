@@ -29,7 +29,8 @@ namespace DiskSpace
         Grid root, dialogLayer;
         RadioButton navHome, navOverview, navExplore, navFiles, navCleanup, navMove, navProtect, navDisks;
         FrameworkElement homePage, scanPage, overviewPage, explorePage, filesPage, cleanupPage, movePage, protectPage, disksPage, currentPage;
-        Button maxButton, dialogPrimary, dialogSecondary;
+        Button maxButton, dialogPrimary, dialogSecondary, toastAction;
+        Action toastActionHandler;
         Button selOpen, selExplorer, selCopy, selRescan, selShrink, selRecycle;
         TextBlock themeIcon, themeLabel, scanContextPath, scanContextDetail, selName, selDetail, toastIcon, toastText, dialogTitle;
         Border scanContext, selectionBar, toast;
@@ -203,6 +204,30 @@ namespace DiskSpace
             toastIcon = E<TextBlock>("ToastIcon");
             toastText = E<TextBlock>("ToastText");
             toastTimer.Tick += (s, e) => HideToast();
+            // An action in the notification, such as Undo. Made here so the shared layout file stays unchanged.
+            toastAction = new Button
+            {
+                Style = (Style)Res("LinkButton"),
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(18, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed
+            };
+            toastAction.SetResourceReference(Control.ForegroundProperty, "ToastText");
+            toastAction.Click += (s, e) =>
+            {
+                Action a = toastActionHandler;
+                toastActionHandler = null;
+                HideToast();
+                if (a != null) Try(a);
+            };
+            // The action is docked right, before the text, so a long message trims instead of pushing it out.
+            var toastRow = toastText.Parent as Panel;
+            if (toastRow != null)
+            {
+                DockPanel.SetDock(toastAction, Dock.Right);
+                toastRow.Children.Insert(toastRow.Children.IndexOf(toastText), toastAction);
+            }
 
             Window.PreviewKeyDown += OnKeyDown;
             Window.Closing += (s, e) => { if (cancel != null) cancel.Cancel(); };
@@ -284,6 +309,7 @@ namespace DiskSpace
                 BuildTreemapLegend();
                 RefreshFiles();
             }
+            RefreshProtect();
             RefreshDiskList();
         }
 
@@ -322,13 +348,15 @@ namespace DiskSpace
             selRecycle.IsEnabled = real && selected.Parent != null && !busy;
         }
 
-        void ShowMenu(Node n, UIElement target)
+        // allowOpen is false for files whose own app can run or import them (Protect offers only Show in Explorer
+        // for keys, certificates and sign-in files), so the menu leaves Open out.
+        void ShowMenu(Node n, UIElement target, bool allowOpen = true)
         {
             var dir = n as DirNode;
             var file = n as FileNode;
             bool real = dir == null || !dir.Unaccounted;
             var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
-            AddMenuItem(menu, "\uE8E5", "Open", real, () => ShellOps.Open(n.FullPath));
+            if (allowOpen) AddMenuItem(menu, "\uE8E5", "Open", real, () => ShellOps.Open(n.FullPath));
             AddMenuItem(menu, "\uEC50", "Show in Explorer", real, () => ShellOps.ShowInExplorer(n.FullPath));
             AddMenuItem(menu, "\uE8C8", "Copy path", real, () => CopyPath(n));
             AddMenuItem(menu, "\uE946", "Properties", real, () => ShellOps.ShowProperties(n.FullPath, Handle));
@@ -439,6 +467,7 @@ namespace DiskSpace
             ScanResult r = result;
             insights = await Task.Run(() => Insights.Find(r, elevated));
             movePlan = await Task.Run(() => MovePlan.For(r));
+            if (result == r) StartCoverage();
             var oldDir = old as DirNode;
             if (exploreFolder != null && oldDir != null && exploreFolder.IsUnder(oldDir))
                 exploreFolder = replacement as DirNode ?? old.Parent;
@@ -454,6 +483,7 @@ namespace DiskSpace
             RefreshFiles();
             RefreshCleanup();
             RefreshMove();
+            RefreshProtect();
         }
 
         void ExportCsv()
@@ -552,6 +582,16 @@ namespace DiskSpace
 
         void Toast(string message, string glyph = "\uE73E")
         {
+            Toast(message, glyph, null, null);
+        }
+
+        // A notification with one action, such as Undo. It stays a little longer, so there is time to use it.
+        void Toast(string message, string glyph, string actionText, Action action)
+        {
+            toastActionHandler = action;
+            toastAction.Content = actionText;
+            toastAction.Visibility = action != null && actionText != null ? Visibility.Visible : Visibility.Collapsed;
+            toastTimer.Interval = TimeSpan.FromSeconds(action != null ? 8 : 5);
             toastText.Text = message;
             toastIcon.Text = glyph;
             toast.Visibility = Visibility.Visible;
@@ -655,6 +695,18 @@ namespace DiskSpace
             if (options.Dialog == "recycle" && pick != null) Recycle(pick);
             if (options.Dialog == "error") ShowError("This is what an error looks like.");
             if (options.Dialog == "move" && movePlan.Suggestions.Count > 0) RunSuggestion(movePlan.Suggestions[0], false);
+            if (options.Page == "protect")
+            {
+                // --dialog protect-expand | protect-trust | protect-hidden | protect-normal. The backup check runs
+                // after the scan, so the capture waits for it (up to 20 s).
+                ApplyProtectSnapshot(options.Dialog);
+                WhenCoverageDone(() =>
+                {
+                    ScrollProtectSnapshot(options.Dialog);
+                    After(900, CaptureAndClose);
+                });
+                return;
+            }
             After(900, CaptureAndClose);
         }
 

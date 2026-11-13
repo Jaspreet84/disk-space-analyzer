@@ -156,11 +156,6 @@ namespace DiskSpace
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         static extern int SHQueryRecycleBin(string pszRootPath, ref SHQUERYRBINFO pSHQueryRBInfo);
 
-        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-        static extern int SHGetKnownFolderPath([In] ref Guid rfid, uint dwFlags, IntPtr hToken, [MarshalAs(UnmanagedType.LPWStr)] out string ppszPath);
-
-        static readonly Guid DownloadsFolder = new Guid("374DE290-123F-4565-9164-39C4925E467B");
-
         // Total size of the Recycle Bin on all drives, or 0 if Windows does not say.
         public static long RecycleBinBytes()
         {
@@ -170,10 +165,7 @@ namespace DiskSpace
 
         public static string Downloads()
         {
-            Guid id = DownloadsFolder;
-            string path;
-            if (SHGetKnownFolderPath(ref id, 0, IntPtr.Zero, out path) == 0 && !string.IsNullOrEmpty(path)) return path;
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+            return KnownFolders.Downloads();
         }
     }
 }
