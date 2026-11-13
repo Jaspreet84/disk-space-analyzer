@@ -12,7 +12,7 @@ namespace DiskSpace
         static void Usage()
         {
             Console.WriteLine("Usage: dsa <drive or folder> [--depth N] [--top N] [--csv file.csv] [--moves]");
-            Console.WriteLine("       dsa <drive or folder> --protect [--all] [--coverage] [--timing] [--protect-home DIR] [--no-protect]");
+            Console.WriteLine("       dsa <drive or folder> --protect [--content [--findings]] [--all] [--coverage] [--timing] [--protect-home DIR] [--no-protect]");
             Console.WriteLine();
             Console.WriteLine("  --depth N   how many folder levels to list (default 2)");
             Console.WriteLine("  --top N     how many entries to show per list and per folder (default 10)");
@@ -20,9 +20,11 @@ namespace DiskSpace
             Console.WriteLine("  --moves     only list your drives and what would be better kept on another drive");
             Console.WriteLine("  --protect-info  print what the Protect page reads and keeps, as this build does it");
             Console.WriteLine("  --protect   list what the Protect page finds by file name and location (nothing is opened)");
+            Console.WriteLine("  --content   with --protect, also read small text files for keys with a known format (only lines are shown, never a key)");
+            Console.WriteLine("  --findings  with --content, also print why each match was reported");
             Console.WriteLine("  --all       with --protect, also list files in their usual places, in projects, and hidden by you");
             Console.WriteLine("  --coverage  with --protect, check whether your personal folders have a copy on another drive");
-            Console.WriteLine("  --timing    print scan_ms, analyze_ms and coverage_ms on stderr");
+            Console.WriteLine("  --timing    print scan_ms, analyze_ms, coverage_ms and the content scan counters on stderr");
             Console.WriteLine("  --protect-home DIR  judge places as if DIR were your user folder (for the test fixture tree)");
             Console.WriteLine("  --no-protect        skip the Protect checks (for timing comparisons)");
             Console.WriteLine();
@@ -34,6 +36,7 @@ namespace DiskSpace
             string path = null, csv = null, protectHome = null;
             int top = 10, depth = 2;
             bool moves = false, protect = false, all = false, coverage = false, timing = false, noProtect = false;
+            bool content = false, reasons = false;
             try
             {
                 for (int i = 0; i < args.Length; i++)
@@ -45,6 +48,8 @@ namespace DiskSpace
                     else if (a == "--moves") moves = true;
                     else if (a == "--protect") protect = true;
                     else if (a == "--all") all = true;
+                    else if (a == "--content") content = true;
+                    else if (a == "--findings") reasons = true;
                     else if (a == "--coverage") coverage = true;
                     else if (a == "--timing") timing = true;
                     else if (a == "--no-protect") noProtect = true;
@@ -85,6 +90,13 @@ namespace DiskSpace
             if (noProtect && (protect || coverage || protectHome != null))
             {
                 Console.Error.WriteLine("--no-protect cannot be combined with --protect, --coverage or --protect-home.");
+                return 2;
+            }
+            // The content scan runs only when asked for on this command line. protect.json's switch is the app's
+            // consent and never implies it here.
+            if (content && !protect)
+            {
+                Console.Error.WriteLine("--content needs --protect.");
                 return 2;
             }
 
@@ -137,11 +149,48 @@ namespace DiskSpace
             r.Analyze();
             long analyzeMs = clock.ElapsedMilliseconds;
 
+            // The content scan, only with --content. Its consent comes from this command line alone.
+            long planMs = 0, contentMs = 0;
+            ContentPlan plan = null;
+            ContentProgress progress = null;
+            bool stopped = false;
+            ProtectStore store = protect ? ProtectStore.Load(ProtectStore.DefaultPath) : null;
+            if (content && r.Protect != null)
+            {
+                clock.Restart();
+                plan = SecretScan.Plan(r, store, null);
+                planMs = clock.ElapsedMilliseconds;
+
+                clock.Restart();
+                progress = new ContentProgress();
+                ContentConsent consent = ContentConsent.FromCommandLine(true);
+                ContentPlan work = plan;
+                ContentProgress p = progress;
+                Task<ContentResult> job = Task.Run(() => SecretScan.Run(consent, work, p, cts.Token));
+                while (!job.Wait(400))
+                {
+                    if (showProgress)
+                        Console.Error.Write(("\rReading text files... " + Fmt.Count(Interlocked.Read(ref p.DoneFiles)) + " of " +
+                                             Fmt.Count(plan.Files.Length) + " files").PadRight(60));
+                }
+                if (showProgress) Console.Error.Write("\r" + new string(' ', 60) + "\r");
+                ContentResult done = job.Result;
+                r.ContentFindings.AddRange(done.Findings);
+                r.ContentNodes.AddRange(done.Nodes);
+                stopped = done.Cancelled;
+                contentMs = clock.ElapsedMilliseconds;
+            }
+
             long coverageMs = 0;
             if (protect)
             {
-                PrintProtect(r, all);
-                if (coverage) coverageMs = PrintCoverage(r, protectHome != null ? null : drives, cts.Token);
+                PrintProtect(r, store, all, reasons, progress);
+                if (stopped)
+                {
+                    Console.WriteLine("Stopped after " + Fmt.Count(Interlocked.Read(ref progress.DoneFiles)) + " of " +
+                                      Fmt.Count(plan.Files.Length) + " files.");
+                }
+                else if (coverage) coverageMs = PrintCoverage(r, protectHome != null ? null : drives, cts.Token);
             }
             if (moves)
             {
@@ -165,63 +214,248 @@ namespace DiskSpace
                 Console.Error.WriteLine("context_ms " + contextMs);
                 Console.Error.WriteLine("analyze_ms " + analyzeMs);
                 Console.Error.WriteLine("coverage_ms " + coverageMs);
+                // Counts only: the content scan reports no path and no value here.
+                Console.Error.WriteLine("plan_ms " + planMs);
+                Console.Error.WriteLine("content_ms " + contentMs);
+                Console.Error.WriteLine("candidates " + (plan != null ? plan.Files.Length
+                    : r.ContentCandidates != null ? r.ContentCandidates.Length : 0));
+                Console.Error.WriteLine("files_opened " + Counter(progress, 0));
+                Console.Error.WriteLine("bytes_read " + Counter(progress, 1));
+                Console.Error.WriteLine("skipped_binary " + Counter(progress, 2));
+                Console.Error.WriteLine("skipped_utf16 " + Counter(progress, 3));
+                Console.Error.WriteLine("skipped_large " + Counter(progress, 4));
+                Console.Error.WriteLine("skipped_unreadable " + Counter(progress, 5));
             }
-            return 0;
+            return stopped ? 1 : 0;
+        }
+
+        // One content scan counter for --timing; 0 when the content scan did not run.
+        static long Counter(ContentProgress p, int which)
+        {
+            if (p == null) return 0;
+            switch (which)
+            {
+                case 0: return Interlocked.Read(ref p.FilesOpened);
+                case 1: return Interlocked.Read(ref p.BytesRead);
+                case 2: return Interlocked.Read(ref p.SkippedBinary);
+                case 3: return Interlocked.Read(ref p.SkippedUtf16);
+                case 4: return Interlocked.Read(ref p.SkippedTooLarge);
+                default: return Interlocked.Read(ref p.SkippedUnreadable);
+            }
+        }
+
+        // One file on the Protect list: its findings by name and by content, joined on the normalized path as the
+        // page joins them (spec 5.3). Only visible findings are on a card; hidden ones are listed apart.
+        sealed class CliCard
+        {
+            public string Path;
+            public readonly List<Finding> ByName = new List<Finding>();
+            public readonly List<Finding> ByContent = new List<Finding>();
+            public long Size;
+            public FindingTier Tier = FindingTier.WorthALook;
+            public Place Place = Place.Other;
+            public bool PlaceSet;
+            public int Group;
         }
 
         // Findings: to review first (by place, then Confirmed before Likely, then largest first), then the ones in
         // their usual places, then .env files in projects, then the ones the user hid. Without --all the last
-        // three groups give one count line each.
-        static void PrintProtect(ScanResult r, bool all)
+        // three groups give one count line each. A file found both by name and by content is one entry, with its
+        // content matches listed under it by line. A key itself is never printed.
+        static void PrintProtect(ScanResult r, ProtectStore store, bool all, bool reasons, ContentProgress progress)
         {
-            Console.WriteLine("Protect: found by file name and location. Nothing was opened. Paths can contain names and account numbers.");
+            bool contentRan = progress != null;
+            long read = contentRan ? Interlocked.Read(ref progress.DoneFiles) : 0;
+            Console.WriteLine(ProtectInfo.CliHeader(contentRan, read, ProtectConstants.ContentRules.Length) +
+                              " Paths can contain names and account numbers.");
             if (r.Protect == null) return;
 
-            ProtectStore store = ProtectStore.Load(ProtectStore.DefaultPath);
-            var review = new List<int>();
-            var usual = new List<int>();
-            var projects = new List<int>();
-            var hidden = new List<int>();
+            var cards = new Dictionary<string, CliCard>(StringComparer.Ordinal);
+            var order = new List<CliCard>();
+            var hiddenName = new List<int>();  // indexes into r.Findings
+            var hiddenContent = new List<Finding>();
             for (int i = 0; i < r.Findings.Count; i++)
             {
                 Finding f = r.Findings[i];
-                if (store.IsHidden(f)) hidden.Add(i);
-                else if (f.Place == Place.UsualPlace) usual.Add(i);
-                else if (f.Place == Place.Repository && f.PatternId == "dotenv") projects.Add(i);
-                else review.Add(i);
+                if (store.IsHidden(f)) { hiddenName.Add(i); continue; }
+                CliCard c = CardFor(cards, order, f);
+                c.ByName.Add(f);
+                if (!c.PlaceSet) { c.Place = f.Place; c.PlaceSet = true; }  // a by-name finding's place wins (spec 5.2)
+                Node n = i < r.FindingNodes.Count ? r.FindingNodes[i] : null;
+                if (n != null) c.Size = Math.Max(c.Size, n.Size);
+                if (f.Tier < c.Tier) c.Tier = f.Tier;
             }
-            Comparison<int> order = (a, b) =>
+            for (int i = 0; i < r.ContentFindings.Count; i++)
+            {
+                Finding f = r.ContentFindings[i];
+                if (store.IsHidden(f)) { hiddenContent.Add(f); continue; }
+                CliCard c = CardFor(cards, order, f);
+                c.ByContent.Add(f);
+                Node n = i < r.ContentNodes.Count ? r.ContentNodes[i] : null;
+                if (n != null) c.Size = Math.Max(c.Size, n.Size);
+                if (f.Tier < c.Tier) c.Tier = f.Tier;
+            }
+
+            var review = new List<CliCard>();
+            var usual = new List<CliCard>();
+            var projects = new List<CliCard>();
+            foreach (CliCard c in order)
+            {
+                c.ByContent.Sort(ByTierThenLine);
+                if (!c.PlaceSet) { c.Place = c.ByContent[0].Place; c.PlaceSet = true; }
+                bool hasUsual = false, allEnvSecret = true, dotenvByName = false;
+                foreach (Finding f in c.ByName)
+                {
+                    if (f.Place == Place.UsualPlace) hasUsual = true;
+                    if (f.PatternId == "dotenv") dotenvByName = true;
+                }
+                foreach (Finding f in c.ByContent)
+                {
+                    if (f.Place == Place.UsualPlace) hasUsual = true;
+                    if (f.PatternId != "env-secret") allEnvSecret = false;
+                }
+                // A repository dotenv file whose only content findings are env-secret (spec 5.3).
+                bool onlyEnvSecretInRepo = c.Place == Place.Repository && allEnvSecret && (dotenvByName || c.ByContent.Count > 0);
+                Finding lead = c.ByName.Count > 0 ? c.ByName[0] : c.ByContent[0];
+                c.Group = ProtectInfo.GroupOf(lead, hasUsual, onlyEnvSecretInRepo);
+                if (c.Group == ProtectInfo.GroupUsual) usual.Add(c);
+                else if (c.Group == ProtectInfo.GroupProjects) projects.Add(c);
+                else review.Add(c);
+            }
+            Comparison<CliCard> byPlace = (a, b) =>
+            {
+                int k = PlaceRank(a.Place).CompareTo(PlaceRank(b.Place));
+                if (k != 0) return k;
+                k = a.Tier.CompareTo(b.Tier);
+                if (k != 0) return k;
+                k = b.Size.CompareTo(a.Size);
+                if (k != 0) return k;
+                return string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
+            };
+            review.Sort(byPlace);
+            usual.Sort(byPlace);
+            projects.Sort(byPlace);
+            // Hidden by-name rows keep the stage 1 order: place, tier, largest first, then path.
+            hiddenName.Sort((a, b) =>
             {
                 Finding fa = r.Findings[a], fb = r.Findings[b];
-                int c = PlaceRank(fa.Place).CompareTo(PlaceRank(fb.Place));
-                if (c != 0) return c;
-                c = fa.Tier.CompareTo(fb.Tier);
-                if (c != 0) return c;
-                c = SizeOf(r, b).CompareTo(SizeOf(r, a));
-                if (c != 0) return c;
+                int k = PlaceRank(fa.Place).CompareTo(PlaceRank(fb.Place));
+                if (k != 0) return k;
+                k = fa.Tier.CompareTo(fb.Tier);
+                if (k != 0) return k;
+                k = SizeOf(r, b).CompareTo(SizeOf(r, a));
+                if (k != 0) return k;
                 return string.Compare(fa.Path, fb.Path, StringComparison.OrdinalIgnoreCase);
-            };
-            review.Sort(order);
-            usual.Sort(order);
-            projects.Sort(order);
-            hidden.Sort(order);
+            });
+            hiddenContent.Sort(ByTierThenLine);
 
-            foreach (int i in review) Console.WriteLine(Row(r.Findings[i], null));
+            foreach (CliCard c in review) PrintCard(c, null, reasons);
             if (all)
             {
-                foreach (int i in usual) Console.WriteLine(Row(r.Findings[i], "usual"));
-                foreach (int i in projects) Console.WriteLine(Row(r.Findings[i], "project"));
-                foreach (int i in hidden) Console.WriteLine(Row(r.Findings[i], "hidden"));
+                foreach (CliCard c in usual) PrintCard(c, "usual", reasons);
+                foreach (CliCard c in projects) PrintCard(c, "project", reasons);
+                foreach (int i in hiddenName) Console.WriteLine(Row(r.Findings[i], "hidden"));
+                foreach (Finding f in hiddenContent) Console.WriteLine(ContentRow(f) + "  hidden");
             }
 
             Console.WriteLine();
             Console.WriteLine(review.Count == 0 ? "Nothing to review." : review.Count + (review.Count == 1 ? " file to review." : " files to review."));
+            if (contentRan)
+            {
+                // Distinct (file, pattern) pairs among the visible content findings on counted entries (spec 5.4).
+                int pairs = 0, withKeys = 0;
+                foreach (CliCard c in review)
+                {
+                    var seen = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (Finding f in c.ByContent) seen.Add(f.PatternId);
+                    pairs += seen.Count;
+                    if (seen.Count > 0) withKeys++;
+                }
+                Console.WriteLine(pairs == 0 ? "Keys in text: none found." :
+                    "Keys in text: " + pairs + (withKeys == 1 ? ", in 1 file." : ", in " + withKeys + " files."));
+            }
+            int hidden = hiddenName.Count + hiddenContent.Count;
             if (!all)
             {
                 if (usual.Count > 0) Console.WriteLine(usual.Count + " in their usual places (--all lists them).");
                 if (projects.Count > 0) Console.WriteLine(projects.Count + " .env files in your projects (--all lists them).");
-                if (hidden.Count > 0) Console.WriteLine(hidden.Count + " hidden by you (--all lists them).");
+                if (hidden > 0) Console.WriteLine(hidden + " hidden by you (--all lists them).");
             }
+        }
+
+        static CliCard CardFor(Dictionary<string, CliCard> cards, List<CliCard> order, Finding f)
+        {
+            string key = ProtectStore.Normalize(f.Path);
+            CliCard c;
+            if (!cards.TryGetValue(key, out c))
+            {
+                c = new CliCard();
+                c.Path = f.Path;
+                cards.Add(key, c);
+                order.Add(c);
+            }
+            return c;
+        }
+
+        // A file's by-name rows (or, for a file found only by content, one row naming its strongest match), then
+        // one line per content match: "  line 12:5  GitHub token  Confirmed  <place>  <path>".
+        static void PrintCard(CliCard c, string mark, bool reasons)
+        {
+            if (c.ByName.Count > 0)
+                foreach (Finding f in c.ByName) Console.WriteLine(Row(f, mark));
+            else
+                Console.WriteLine(Row(Strongest(c.ByContent), mark));
+            foreach (Finding f in c.ByContent)
+            {
+                Console.WriteLine(ContentRow(f));
+                if (reasons)
+                {
+                    ContentRuleInfo rule = RuleOf(f.PatternId);
+                    if (rule != null) Console.WriteLine("      " + rule.Reason);
+                }
+            }
+        }
+
+        static string ContentRow(Finding f)
+        {
+            return "  line " + f.Line + ":" + f.Column + "  " + f.Kind + "  " + f.Tier + "  " + f.Place + "  " + f.Path;
+        }
+
+        // Tier first, then path, then line and column.
+        static int ByTierThenLine(Finding a, Finding b)
+        {
+            int k = a.Tier.CompareTo(b.Tier);
+            if (k != 0) return k;
+            k = string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
+            if (k != 0) return k;
+            k = a.Line.CompareTo(b.Line);
+            return k != 0 ? k : a.Column.CompareTo(b.Column);
+        }
+
+        // The strongest content match: by tier, then by the order of the pattern table (spec 5.3).
+        static Finding Strongest(List<Finding> found)
+        {
+            Finding best = null;
+            foreach (Finding f in found)
+            {
+                if (best == null || f.Tier < best.Tier || (f.Tier == best.Tier && RuleIndex(f.PatternId) < RuleIndex(best.PatternId)))
+                    best = f;
+            }
+            return best;
+        }
+
+        static int RuleIndex(string id)
+        {
+            ContentRuleInfo[] rules = ProtectConstants.ContentRules;
+            for (int i = 0; i < rules.Length; i++)
+                if (rules[i].Id == id) return i;
+            return rules.Length;
+        }
+
+        static ContentRuleInfo RuleOf(string id)
+        {
+            int i = RuleIndex(id);
+            return i < ProtectConstants.ContentRules.Length ? ProtectConstants.ContentRules[i] : null;
         }
 
         static string Row(Finding f, string mark)

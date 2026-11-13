@@ -661,7 +661,7 @@
           <StackPanel Margin="40,32,40,32">
             <TextBlock Style="{StaticResource Title}" Text="Protect"/>
             <TextBlock Style="{StaticResource BodySecondary}" Margin="0,6,0,0" MaxWidth="760" HorizontalAlignment="Left"
-                       Text="Protect looks at file names, folders, sizes and dates to show where sign-in keys and personal papers are, and whether your large folders have a copy on another drive. It does not open your files, and nothing leaves this PC."/>
+                       Text="Protect shows where sign-in keys and personal papers are, and whether your large folders have a copy on another drive. It checks file names and places. It reads text files only if you turn on the content scan. Nothing leaves this PC."/>
 
             <!-- Before a scan -->
             <Border x:Name="ProtectNoScan" Style="{StaticResource Card}" Margin="0,24,0,0" Padding="20,18">
@@ -684,41 +684,118 @@
               <!-- Summary strip -->
               <Border Style="{StaticResource Card}" Margin="0,24,0,0" Padding="24,22">
                 <Grid>
+                  <!-- The figures take up to 500 px. Below that (a narrow window) their captions wrap between words;
+                       "sign-ins" uses a non-breaking hyphen so it never splits there. -->
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*" MinWidth="140"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="150"/>
-                    <ColumnDefinition Width="150"/>
-                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="3*" MaxWidth="500"/>
                   </Grid.ColumnDefinitions>
                   <StackPanel>
                     <TextBlock Style="{StaticResource Caption}" FontSize="14" Text="To review"/>
                     <TextBlock x:Name="ProtectToReview" Style="{StaticResource Hero}" Margin="0,2,0,0"/>
-                    <TextBlock x:Name="ProtectNote" Style="{StaticResource Caption}" Margin="0,4,24,0" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="ProtectNote" Style="{StaticResource Caption}" Margin="0,4,16,0" TextWrapping="Wrap"/>
                   </StackPanel>
-                  <Rectangle Grid.Column="1" Width="1" Fill="{DynamicResource Divider}" Margin="8,4,32,4"/>
-                  <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,12,0">
-                    <TextBlock Style="{StaticResource Caption}" Text="Keys and sign-ins" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="ProtectKeys" Style="{StaticResource StatValue}"/>
-                  </StackPanel>
-                  <StackPanel Grid.Column="3" VerticalAlignment="Center" Margin="0,0,12,0">
-                    <TextBlock Style="{StaticResource Caption}" Text="Personal documents" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="ProtectDocs" Style="{StaticResource StatValue}"/>
-                  </StackPanel>
-                  <StackPanel Grid.Column="4" VerticalAlignment="Center">
-                    <TextBlock Style="{StaticResource Caption}" Text="Without a current copy" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="ProtectNoCopy" Style="{StaticResource StatValue}"/>
-                  </StackPanel>
+                  <Rectangle Grid.Column="1" Width="1" Fill="{DynamicResource Divider}" Margin="4,4,20,4"/>
+                  <!-- Captions on one row and values on the next, so the values stay level whatever wraps. -->
+                  <Grid Grid.Column="2" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="112*"/>
+                      <ColumnDefinition Width="127*"/>
+                      <ColumnDefinition Width="105*"/>
+                      <ColumnDefinition Width="126*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Style="{StaticResource Caption}" Text="Keys and sign&#x2011;ins" TextWrapping="Wrap" VerticalAlignment="Bottom" Margin="0,0,20,0"/>
+                    <TextBlock Grid.Column="1" Style="{StaticResource Caption}" Text="Personal documents" TextWrapping="Wrap" VerticalAlignment="Bottom" Margin="0,0,20,0"/>
+                    <TextBlock Grid.Column="2" Style="{StaticResource Caption}" Text="Secrets in text" TextWrapping="Wrap" VerticalAlignment="Bottom" Margin="0,0,20,0"/>
+                    <TextBlock Grid.Column="3" Style="{StaticResource Caption}" Text="Without a current copy" TextWrapping="Wrap" VerticalAlignment="Bottom"/>
+                    <TextBlock Grid.Row="1" x:Name="ProtectKeys" Style="{StaticResource StatValue}" Margin="0,4,20,0"/>
+                    <TextBlock Grid.Row="1" Grid.Column="1" x:Name="ProtectDocs" Style="{StaticResource StatValue}" Margin="0,4,20,0"/>
+                    <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,0,20,0">
+                      <TextBlock x:Name="ProtectSecrets" Style="{StaticResource StatValue}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock x:Name="ProtectSecretsNote" Style="{StaticResource Caption}" Visibility="Collapsed"/>
+                    </StackPanel>
+                    <TextBlock Grid.Row="1" Grid.Column="3" x:Name="ProtectNoCopy" Style="{StaticResource StatValue}"/>
+                  </Grid>
                 </Grid>
+              </Border>
+
+              <!-- The content scan: off until the user turns it on -->
+              <Border x:Name="ProtectContentCard" Style="{StaticResource Card}" Margin="0,12,0,0" Padding="20,18">
+                <StackPanel>
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Width="40" Height="40" CornerRadius="8" Background="{DynamicResource AccentTint}" VerticalAlignment="Top">
+                      <TextBlock Style="{StaticResource Icon}" Text="&#xE721;" FontSize="18" Foreground="{DynamicResource AccentText}" HorizontalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="16,0,24,0">
+                      <TextBlock Style="{StaticResource BodyStrong}" FontSize="15" Text="Look inside text files for keys"/>
+                      <TextBlock x:Name="ProtectContentLine" Style="{StaticResource BodySecondary}" FontSize="13" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                      <Button x:Name="ProtectContentInfoLink" Style="{StaticResource LinkButton}" FontSize="13" HorizontalAlignment="Left"
+                              Margin="0,6,0,0" Content="What Protect reads"/>
+                    </StackPanel>
+                    <ToggleButton x:Name="ProtectContentSwitch" Grid.Column="2" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"
+                                  AutomationProperties.Name="Content scan"/>
+                  </Grid>
+                  <StackPanel x:Name="ProtectContentProgress" Margin="56,14,0,0" Visibility="Collapsed">
+                    <Grid x:Name="ProtectContentTitleRow">
+                      <TextBlock Style="{StaticResource BodyStrong}" VerticalAlignment="Center" Text="Reading text files"/>
+                      <Button x:Name="ProtectContentCancel" Content="Cancel" HorizontalAlignment="Right"/>
+                    </Grid>
+                    <ProgressBar x:Name="ProtectContentBar" Style="{StaticResource ThinProgress}" Maximum="1000" Margin="0,12,0,0"/>
+                    <TextBlock x:Name="ProtectContentText" Style="{StaticResource Caption}" Margin="0,8,0,0" TextTrimming="CharacterEllipsis"/>
+                    <Button x:Name="ProtectContentAgain" Style="{StaticResource LinkButton}" FontSize="13" HorizontalAlignment="Left"
+                            Margin="0,6,0,0" Content="Read all again" Visibility="Collapsed"/>
+                  </StackPanel>
+                </StackPanel>
               </Border>
               <StackPanel x:Name="ProtectCoverageBusy" Margin="0,10,0,0" Visibility="Collapsed">
                 <ProgressBar Style="{StaticResource ThinProgress}" IsIndeterminate="True"/>
                 <TextBlock Style="{StaticResource Caption}" Margin="0,6,0,0" Text="Checking other drives…"/>
               </StackPanel>
               <TextBlock Style="{StaticResource Caption}" Margin="0,10,0,0" TextWrapping="Wrap" MaxWidth="760" HorizontalAlignment="Left"
-                         Text="Confirmed means Protect is sure what kind of file it is. Likely means the name and place strongly suggest it. Neither means something is wrong."/>
+                         Text="Confirmed means Protect is sure what kind of file it is. Likely means the name and place strongly suggest it. Neither means something is wrong. For a match in text, Confirmed means a checksum or a full key block leaves no doubt."/>
 
-              <TextBlock x:Name="ProtectEmpty" Style="{StaticResource BodySecondary}" Margin="0,20,0,0" Visibility="Collapsed"/>
+              <TextBlock x:Name="ProtectEmpty" Style="{StaticResource BodySecondary}" Margin="0,20,0,0" Visibility="Collapsed"
+                         TextWrapping="Wrap" MaxWidth="760" HorizontalAlignment="Left"/>
+              <StackPanel x:Name="ProtectNotLooked" Margin="0,8,0,0" Visibility="Collapsed">
+                <ToggleButton x:Name="ProtectNotLookedToggle" HorizontalAlignment="Left">
+                  <ToggleButton.Template>
+                    <ControlTemplate TargetType="ToggleButton">
+                      <StackPanel Orientation="Horizontal" Background="Transparent" Cursor="Hand">
+                        <TextBlock Text="What Protect does not look for" Foreground="{DynamicResource AccentText}" FontSize="13"/>
+                        <TextBlock x:Name="Chevron" Style="{StaticResource Icon}" Text="&#xE70D;" FontSize="10" Margin="6,1,0,0" Foreground="{DynamicResource AccentText}"/>
+                      </StackPanel>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                          <Setter TargetName="Chevron" Property="Text" Value="&#xE70E;"/>
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </ToggleButton.Template>
+                </ToggleButton>
+                <ItemsControl x:Name="ProtectNotLookedList" Margin="0,6,0,0" MaxWidth="760" HorizontalAlignment="Left"
+                              Visibility="{Binding IsChecked, ElementName=ProtectNotLookedToggle, Converter={StaticResource BoolToVisibility}}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <BulletDecorator Margin="0,3,0,0">
+                        <BulletDecorator.Bullet>
+                          <TextBlock Text="·" Style="{StaticResource BodySecondary}" FontSize="13" Margin="2,0,8,0"/>
+                        </BulletDecorator.Bullet>
+                        <TextBlock Text="{Binding}" Style="{StaticResource BodySecondary}" FontSize="13" TextWrapping="Wrap"/>
+                      </BulletDecorator>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
 
               <!-- Findings, grouped into cards -->
               <ItemsControl x:Name="ProtectFindings" Margin="0,16,0,0">
@@ -796,14 +873,17 @@
                             <Button Content="{Binding PrimaryText}" Tag="{Binding PrimaryTag}" MinWidth="150"/>
                             <Button Content="Show in Explorer" Tag="protect-show" Style="{StaticResource LinkButton}" FontSize="13"
                                     HorizontalAlignment="Right" Margin="0,8,0,0" Visibility="{Binding ShowLinkVisibility}"/>
+                            <Button Content="Copy path" Tag="protect-copy" Style="{StaticResource LinkButton}" FontSize="13"
+                                    HorizontalAlignment="Right" Margin="0,8,0,0" Visibility="{Binding CopyVisibility}"/>
                             <Button Content="Hide" Tag="protect-dismiss" Style="{StaticResource SubtleButton}" MinWidth="150" Margin="0,8,0,0"
                                     ToolTip="Hide from this list. The file is not changed."/>
                             <Button Content="Trust this folder" Tag="protect-trust" Style="{StaticResource LinkButton}" FontSize="13"
                                     HorizontalAlignment="Right" Margin="0,8,0,0"/>
                           </StackPanel>
                         </Grid>
-                        <ItemsControl ItemsSource="{Binding Items}" Margin="56,12,0,0"
-                                      Visibility="{Binding IsChecked, ElementName=ShowItems, Converter={StaticResource BoolToVisibility}}">
+                        <StackPanel Margin="56,12,0,0"
+                                    Visibility="{Binding IsChecked, ElementName=ShowItems, Converter={StaticResource BoolToVisibility}}">
+                        <ItemsControl ItemsSource="{Binding Items}">
                           <ItemsControl.ItemTemplate>
                             <DataTemplate>
                               <Grid Margin="0,3" Background="Transparent">
@@ -823,19 +903,29 @@
                                 <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
                                   <Button Content="Trust this project" Tag="item-trust" Style="{StaticResource LinkButton}" FontSize="13"
                                           Margin="0,0,10,0" Visibility="{Binding TrustVisibility}"/>
+                                  <Button Content="Open at line" Tag="item-open-line" Style="{StaticResource LinkButton}" FontSize="13"
+                                          Margin="0,0,12,0" Visibility="{Binding OpenLineVisibility}" VerticalAlignment="Center"/>
+                                  <Button Content="Hide" Tag="item-hide" Style="{StaticResource LinkButton}" FontSize="13"
+                                          Margin="0,0,4,0" Visibility="{Binding HideVisibility}" ToolTip="{Binding HideTip}" VerticalAlignment="Center"/>
                                   <Button Style="{StaticResource IconButton}" Content="&#xE8E5;" Tag="item-open" ToolTip="Open"
                                           Width="32" Height="32" Visibility="{Binding OpenVisibility}"/>
-                                  <Button Style="{StaticResource IconButton}" Content="&#xEC50;" Tag="item-show" ToolTip="Show in Explorer" Width="32" Height="32"/>
+                                  <Button Style="{StaticResource IconButton}" Content="&#xEC50;" Tag="item-show" ToolTip="Show in Explorer" Width="32" Height="32"
+                                          Visibility="{Binding ShowVisibility}"/>
                                 </StackPanel>
                               </Grid>
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <Button Content="{Binding ShowAllText}" Tag="protect-show-all" Style="{StaticResource LinkButton}" FontSize="13"
+                                HorizontalAlignment="Left" Margin="0,6,0,0" Visibility="{Binding ShowAllVisibility}"/>
+                        </StackPanel>
                       </StackPanel>
                     </Border>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
+              <Button x:Name="ProtectMoreCards" Style="{StaticResource LinkButton}" FontSize="13" HorizontalAlignment="Left"
+                      Margin="4,0,0,12" Visibility="Collapsed"/>
 
               <!-- Hidden by you -->
               <StackPanel x:Name="ProtectHiddenLine" Orientation="Horizontal" Margin="0,4,0,0" Visibility="Collapsed">

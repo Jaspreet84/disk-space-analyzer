@@ -1,0 +1,4 @@
+APP_SECRET=my_super_secret_value
+PIN_PASSWORD=12345678901234567
+AUTH_TOKEN=short_value
+API_SECRET=true

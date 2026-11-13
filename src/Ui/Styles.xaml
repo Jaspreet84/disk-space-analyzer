@@ -381,6 +381,47 @@
     </Style.Triggers>
   </Style>
 
+  <!-- An on/off switch: a 40x20 track with a 12 px knob that moves right and turns TextOnAccent when on -->
+  <Style x:Key="ToggleSwitch" TargetType="ToggleButton">
+    <Setter Property="Width" Value="40"/>
+    <Setter Property="Height" Value="20"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ToggleButton">
+          <Border x:Name="Track" Width="40" Height="20" CornerRadius="10" BorderThickness="1"
+                  BorderBrush="{DynamicResource ControlBorderStrong}" Background="{DynamicResource ControlFill}">
+            <Ellipse x:Name="Knob" Width="12" Height="12" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="3,0,0,0"
+                     Fill="{DynamicResource TextSecondary}"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Track" Property="Background" Value="{DynamicResource ControlFillHover}"/>
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Track" Property="Background" Value="{DynamicResource Accent}"/>
+              <Setter TargetName="Track" Property="BorderBrush" Value="{DynamicResource Accent}"/>
+              <Setter TargetName="Knob" Property="Fill" Value="{DynamicResource TextOnAccent}"/>
+              <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+              <Setter TargetName="Knob" Property="Margin" Value="0,0,3,0"/>
+            </Trigger>
+            <MultiTrigger>
+              <MultiTrigger.Conditions>
+                <Condition Property="IsChecked" Value="True"/>
+                <Condition Property="IsMouseOver" Value="True"/>
+              </MultiTrigger.Conditions>
+              <Setter TargetName="Track" Property="Background" Value="{DynamicResource AccentHover}"/>
+            </MultiTrigger>
+            <Trigger Property="IsEnabled" Value="False">
+              <Setter Property="Opacity" Value="0.5"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- Search box with placeholder text (from Tag) and the accent underline when focused -->
   <Style x:Key="SearchBox" TargetType="TextBox">
     <Setter Property="Background" Value="{DynamicResource ControlFill}"/>

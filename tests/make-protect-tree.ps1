@@ -8,9 +8,19 @@
 # repeated. Nothing in the tree is a key or any other credential format. Cases with a drive letter are left
 # out, and so are "#! online" cases, because a cloud placeholder cannot be made by hand. Each "#! repo"
 # folder gets an empty .git folder. The output folder must be inside %TEMP% or the repository's obj folder.
+#
+# -Content also writes the by-content corpus (tests\protect-corpus\by-content) on top, for screenshots of the
+# content scan: its home/ files go to the pretend user folder and its proj/ files to the code\app repository.
+# Those files are built by tests\ContentCorpus.cs and hold format-valid test values (no live key), so with
+# -Content the folder must be inside %TEMP%, and you should delete it when the screenshots are done.
+#
+#   powershell -ExecutionPolicy Bypass -File tests\make-protect-tree.ps1 -Out %TEMP%\dsa-protect-content-tree -Content
+#
+# Do not name it dsa-content-* or dsa-plant-*: tests\run-tests.ps1 deletes folders with those names when it starts.
 
 param([string]$Out = (Join-Path $env:TEMP 'dsa-protect-tree'),
-      [string]$Corpus = (Join-Path $PSScriptRoot 'protect-corpus\by-name\cases.tsv'))
+      [string]$Corpus = (Join-Path $PSScriptRoot 'protect-corpus\by-name\cases.tsv'),
+      [switch]$Content)
 
 $ErrorActionPreference = 'Stop'
 $home0 = 'C:\Users\pat'
@@ -25,6 +35,9 @@ $Out = [IO.Path]::GetFullPath($Out).TrimEnd('\')
 $repoObj = Join-Path (Split-Path $PSScriptRoot -Parent) 'obj'
 if (-not ((Test-Under $Out $env:TEMP) -or (Test-Under $Out $repoObj))) {
     throw "The fixture tree is written only inside %TEMP% or $repoObj, not $Out."
+}
+if ($Content -and -not (Test-Under $Out $env:TEMP)) {
+    throw "With -Content the fixture tree is written only inside %TEMP%, not $Out."
 }
 if ([IO.Directory]::Exists($Out)) {
     $entries = @([IO.Directory]::EnumerateFileSystemEntries($Out))
@@ -115,3 +128,13 @@ foreach ($s in $pendingSiblings) {
 }
 
 Write-Host ("Wrote {0} files, {1} folder cases and {2} .git folders to {3} ({4} cases with a drive letter or online-only left out)." -f $files, $folders, $repos, $Out, $skipped)
+
+if ($Content) {
+    $byContent = Join-Path $PSScriptRoot 'protect-corpus\by-content'
+    if (-not ('ContentCorpus' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'ContentCorpus.cs') }
+    $set = [ContentCorpus]::Load((Join-Path $byContent 'cases.tsv'))
+    $proj = Join-Path $Out 'code\app'
+    [IO.Directory]::CreateDirectory((Join-Path $proj '.git')) | Out-Null
+    $n = [ContentCorpus]::WriteAll($set, (Join-Path $byContent 'files'), $Out, $proj, $null)
+    Write-Host ("Wrote {0} content files (home/ to {1}, proj/ to {2}). They hold format-valid test values: delete the folder when done." -f $n, $Out, $proj)
+}

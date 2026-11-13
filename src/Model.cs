@@ -10,6 +10,7 @@ namespace DiskSpace
     {
         public string Name;
         public DirNode Parent;
+        public bool Detached;   // set by ScanResult.Replace on the node it took out of the tree
         public long Size;       // bytes this item takes up on disk
         public long LastWrite;  // newest modification time at or below this item, as a UTC FILETIME
 
@@ -74,7 +75,7 @@ namespace DiskSpace
     }
 
     [Flags]
-    enum FileFlags : byte { None = 0, OnlineOnly = 1, Compressed = 2 }
+    enum FileFlags : byte { None = 0, OnlineOnly = 1, Compressed = 2, Link = 4 }  // Link: a symbolic link or mount point
 
     sealed class FileNode : Node
     {
@@ -165,6 +166,8 @@ namespace DiskSpace
         public long Size;
         public long Count;
         public byte ProtectHint;  // ProtectNames.ExtHint of Key, set by Analyze
+        public bool IsText;       // Key is one of ProtectConstants.TextExtensions, set by Analyze
+        public byte TextClass;    // ProtectNames.TextClassOf(Key): 0 not text, 1 text, 2 text whose names may end in a never-read ending
 
         public ExtInfo(string key, Category category, int index)
         {
@@ -199,6 +202,34 @@ namespace DiskSpace
         public ProtectContext Protect;
         public List<Finding> Findings = new List<Finding>();
         public List<Node> FindingNodes = new List<Node>();
+
+        // The content scan. Analyze writes the candidates (an array nothing changes afterwards) and the three
+        // counts for the consent dialog. The content findings and their nodes are parallel lists that only the UI
+        // thread (or the command line's main thread) writes; Analyze never touches them.
+        public ContentCandidate[] ContentCandidates = new ContentCandidate[0];
+        public int ContentTooLarge, ContentOnlineOnly, ContentSkippedFolders;
+        public readonly List<Finding> ContentFindings = new List<Finding>();
+        public readonly List<Node> ContentNodes = new List<Node>();
+
+        // Whether n is still part of this tree. A replaced folder's old nodes keep their Parent links, so the walk up
+        // also stops at the node Replace took out (marked Detached), which costs the depth, not the siblings.
+        public bool IsAttached(Node n)
+        {
+            for (Node c = n; c != Root; c = c.Parent)
+                if (c == null || c.Detached) return false;
+            return n != null;
+        }
+
+        // Drops the content findings whose file is no longer in the tree.
+        public void PruneContentFindings()
+        {
+            for (int i = ContentFindings.Count - 1; i >= 0; i--)
+            {
+                if (IsAttached(ContentNodes[i])) continue;
+                ContentFindings.RemoveAt(i);
+                ContentNodes.RemoveAt(i);
+            }
+        }
 
         struct Frame
         {
@@ -304,6 +335,9 @@ namespace DiskSpace
                 bool looks = ps != null && (frame.State.ScansSlot != 0 ? (frame.State.Flags & DirFlags.Skip) == 0
                                                                        : !ProtectNames.NothingFoundIn(frame.State));
                 bool wholeDir = looks && frame.State.Tool != ToolHome.None;  // every file in a tool home is a candidate
+                if (ps != null && (frame.State.Flags & DirFlags.NoContent) == 0 && !frame.State.InRepo && ps.RepoHere(dir))
+                    frame.State.InRepo = true;  // inherited by the subfolders through Enter
+                bool contentHere = ps != null && ProtectNames.ContentFilesHere(frame.State);
                 foreach (Node child in dir.Children)
                 {
                     var sub = child as DirNode;
@@ -324,10 +358,22 @@ namespace DiskSpace
                         keys.Add(key, index);
                         var info = new ExtInfo(key, Categories.ForKey(key), index);
                         info.ProtectHint = ProtectNames.ExtHint(key);
+                        info.IsText = ProtectNames.IsTextExtension(key);
+                        info.TextClass = ProtectNames.TextClassOf(key);
                         exts.Add(info);
                     }
                     file.Ext = index;
                     ExtInfo ext = exts[index];
+                    if (contentHere)
+                    {
+                        // The content gate: one byte for most files, and a few chars for the names that can be text
+                        // by name alone (.env files, credentials, config, id_rsa and the other dot names).
+                        byte tc = ext.TextClass;
+                        if (tc == 1 && (file.Flags & (FileFlags.OnlineOnly | FileFlags.Link)) == 0 && file.Size > ProtectConstants.MaxContentBytes)
+                            ps.ContentTooLarge++;  // a plain text extension is text whatever the name
+                        else if (tc != 0 || ProtectNames.MayBeTextName(file.Name))
+                            ps.ContentFile(file, tc, ref frame.State);
+                    }
                     if (looks)
                     {
                         // The per-file gate: for most files one field read and one char compare.
@@ -356,7 +402,12 @@ namespace DiskSpace
             LargestByCategory = heaps;
             var found = new List<Finding>();
             var nodes = new List<Node>();
-            if (ps != null) ps.Finish(found, nodes);
+            if (ps != null) ps.Finish(found, nodes);  // also writes ContentCandidates and the three content counts
+            else
+            {
+                ContentCandidates = new ContentCandidate[0];
+                ContentTooLarge = ContentOnlineOnly = ContentSkippedFolders = 0;
+            }
             Findings = found;
             FindingNodes = nodes;
         }
@@ -425,7 +476,7 @@ namespace DiskSpace
                 dirDelta = 0;
                 var oldFile = (FileNode)old;
                 // A placeholder or compressed file's full length is not in the model, so the totals become inexact.
-                if (oldFile.Flags != 0) { logicalDelta = 0; stale = true; }
+                if ((oldFile.Flags & (FileFlags.OnlineOnly | FileFlags.Compressed)) != 0) { logicalDelta = 0; stale = true; }
                 else logicalDelta = -old.Size;
                 onlineDelta = (oldFile.Flags & FileFlags.OnlineOnly) != 0 ? -1 : 0;
             }
@@ -454,12 +505,13 @@ namespace DiskSpace
                 {
                     fileDelta += 1;
                     var newFile = (FileNode)replacement;
-                    if (newFile.Flags != 0) stale = true;
+                    if ((newFile.Flags & (FileFlags.OnlineOnly | FileFlags.Compressed)) != 0) stale = true;
                     else logicalDelta += replacement.Size;
                     if ((newFile.Flags & FileFlags.OnlineOnly) != 0) onlineDelta += 1;
                 }
             }
             parent.Children = kids.ToArray();
+            old.Detached = true;
             if (stale) parent.StaleHere = true;
 
             // LogicalStale is worked out again on every folder above, so a rescan of the stale part (a fresh
@@ -481,6 +533,7 @@ namespace DiskSpace
                 Array.Sort(p.Children, Node.CompareBySize);
             }
             Analyze();
+            PruneContentFindings();
         }
     }
 

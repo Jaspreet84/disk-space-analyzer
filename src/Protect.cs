@@ -65,6 +65,41 @@ namespace DiskSpace
         }
     }
 
+    // The content scan (stage 2). A candidate is a text file that Analyze picked by its name, size, flags and
+    // folder; nothing is opened to pick it. Dotenv files also get the env-secret row.
+    public enum ContentKind : byte { Text = 1, Dotenv = 2 }
+
+    sealed class ContentCandidate
+    {
+        public readonly FileNode Node;
+        public readonly long Size;      // the size when Analyze picked it; the reader checks the real length again
+        public readonly Place Place;
+        public readonly ContentKind Kind;
+
+        public ContentCandidate(FileNode node, long size, Place place, ContentKind kind)
+        {
+            Node = node;
+            Size = size;
+            Place = place;
+            Kind = kind;
+        }
+    }
+
+    // One content row in words: the rule for the explanation screen, the reason shown on a card, and the plural
+    // used by Hide ("Hide GitHub tokens in this file"). One per content row of Patterns, in the same order.
+    sealed class ContentRuleInfo
+    {
+        public readonly string Id, Rule, Reason, Plural;
+
+        public ContentRuleInfo(string id, string rule, string reason, string plural)
+        {
+            Id = id;
+            Rule = rule;
+            Reason = reason;
+            Plural = plural;
+        }
+    }
+
     // Where a by-name row looks, in words, for the explanation screen. One per Patterns row, in the same order.
     sealed class NameRuleInfo
     {
@@ -89,6 +124,131 @@ namespace DiskSpace
         public const long MaxContentBytes = 1L << 20;
         public const int BinaryProbeBytes = 8 << 10;
         public const int ContentWorkers = 4;
+        // A scan of a network drive or share reads no file contents (ProtectContext.IsNetworkPath).
+        public const string NetworkDrivesNote = "Files on network drives and shares are not read, so nothing comes over the network.";
+
+        // The content scan's table (section 1 of the stage 2 spec). A change to a row is a change to this version.
+        public const int ContentTableVersion = 1;
+        public const int ContentFindingsPerFile = 20;  // after this many matches in one file, matching stops for it
+        public const int ContentRowsPerCard = 50;
+
+        // The text files the content scan reads: these extensions, these exact names, and .env files.
+        public static readonly string[] TextExtensions =
+        {
+            ".txt", ".md", ".json", ".jsonc", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".config", ".properties", ".xml",
+            ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".py", ".rb", ".go", ".java", ".kt", ".kts", ".cs", ".php", ".sh", ".bash", ".zsh",
+            ".ps1", ".psm1", ".psd1", ".bat", ".cmd", ".sql", ".tf", ".tfvars", ".hcl", ".ipynb", ".pem", ".key", ".env"
+        };
+
+        public static readonly string[] TextNames =
+        {
+            "credentials", ".git-credentials", ".npmrc", ".pypirc", ".netrc", "_netrc", ".pgpass", ".gitconfig", ".bashrc",
+            ".bash_profile", ".profile", ".zshrc", ".zprofile", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"
+        };
+
+        // A text extension with one of these endings is still not read: generated and bundled code.
+        public static readonly string[] TextNeverEnds = { ".min.js", ".min.mjs", ".bundle.js", ".map", ".d.ts", ".lock" };
+
+        // Never read, on purpose: logs and exports often hold test tokens and redacted look-alikes, and certificates
+        // are public.
+        public static readonly string[] TextNeverClasses =
+        {
+            "files with no extension (except the names above)", ".html", ".htm", ".svg", ".css", ".csv", ".log", ".crt", ".cer",
+            ".der", ".pfx", ".p12", ".lnk", ".url"
+        };
+
+        // Folders the content scan never opens, on top of SkipFolders, wherever they are. The entries written in
+        // words are the anchored rules, which hold only where the words say.
+        public static readonly string[] ContentSkipFolders =
+        {
+            "site-packages", "dist-packages", "bower_components", "__pycache__", ".tox", ".venv", ".terraform", ".next", ".nuxt",
+            ".svelte-kit", ".parcel-cache", ".angular", ".gradle", ".m2", ".rustup", ".cargo\\registry", "go\\pkg\\mod",
+            ".vscode-server", "vendor beside a composer.json or go.mod", "env or venv holding a pyvenv.cfg"
+        };
+
+        // The tool folders in your user folder whose files the content scan reads. Other dot folders there, .codex
+        // and .claude included, are not read.
+        public static readonly string[] ContentToolHomes =
+        {
+            ".ssh", ".aws", ".azure", ".kube", ".docker", ".minikube", ".android", ".gnupg", ".vagrant.d", ".config\\gh", ".config\\gcloud"
+        };
+
+        // Formats the content scan does not look for yet, and why.
+        public static readonly string[] ContentHeldBack =
+        {
+            "GitLab tokens: older ones have no checksum, and the newer format is still changing, so their matches cannot be measured yet.",
+            "npm tokens: their checksum scheme is described only in a blog post, and there is no real token here to test against.",
+            "Anthropic and PyPI tokens: they are outside this stage, and their structure has no checksum.",
+            "AWS secret access keys found by the name of their setting outside .env files: that waits for a later stage.",
+            "Older Slack tokens, and Slack workflow and trigger webhooks: their format is too loose to report with confidence.",
+            "GitHub App installation tokens in the new form: they last about an hour and carry no checksum.",
+            "The contents of PuTTY key files: .ppk files are already found by name.",
+            "Settings with a secret-looking name outside .env files, web tokens and password.txt files: a later stage.",
+            "Files over " + ProtectInfo.Limit(ProtectConstants.MaxContentBytes) + ", binary files and UTF-16 files: they are not read."
+        };
+
+        // The published Google sample keys, which are never reported. Copied from the gcp-api-key allowlist of the
+        // gitleaks configuration (config/gitleaks.toml, release v8.28.0, MIT licence; its first entry is the
+        // documentation dummy key). Each is split after its first four characters so that no line of this file
+        // holds a whole key.
+        public const int SampleKeyCount = 16;
+        public static readonly string[] GoogleSampleKeys =
+        {
+            "AIza" + "Syabcdefghijklmnopqrstuvwxyz1234567",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyAnLA7NfeLquW1tJFpx_eQCxoX-oo6YyIs",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyCkEhVjf3pduRDt6d1yKOMitrUEke8agEM",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyDMAScliyLx7F0NPDEJi1QmyCgHIAODrlU",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyD3asb-2pEZVqMkmL6M9N6nHZRR_znhrh0",  // sample-key: gitleaks v8.28.0
+            "AIza" + "yDNSXIbFmlXbIE6mCzDLQAqITYefhixbX4A",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyAdOS2zB6NCsk1pCdZ4-P6GBdi_UUPwX7c",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyASWm6HmTMdYWpgMnjRBjxcQ9CKctWmLd4",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyANUvH9H9BsUccjsu2pCmEkOPjjaXeDQgY",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyA5_iVawFQ8ABuTZNUdcwERLJv_a_p4wtM",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyA4UrcGxgwQFTfaI3no3t7Lt1sjmdnP5sQ",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyDSb51JiIcB6OJpwwMicseKRhhrOq1cS7g",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyBF2RrAIm4a0mO64EShQfqfd2AFnzAvvuU",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyBcE-OOIbhjyR83gm4r2MFCu4MJmprNXsw",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyB8qGxt4ec15vitgn44duC5ucxaOi4FmqE",  // sample-key: gitleaks v8.28.0
+            "AIza" + "SyA8vmApnrHNFE0bApF4hoZ11srVL_n0nvY"   // sample-key: gitleaks v8.28.0
+        };
+
+        // One per content row of Patterns, in the same order.
+        public static readonly ContentRuleInfo[] ContentRules =
+        {
+            new ContentRuleInfo("github-token",
+                "GitHub token: a classic token prefix, 36 letters and digits, and a checksum that must verify. Confirmed.",
+                "Its format and checksum match a GitHub token.", "GitHub tokens"),
+            new ContentRuleInfo("github-fine-grained",
+                "GitHub fine-grained token: the fine-grained token prefix, 22 letters and digits, an underscore and 59 more. Likely.",
+                "It has the exact shape of a GitHub fine-grained token.", "GitHub fine-grained tokens"),
+            new ContentRuleInfo("aws-access-key-id",
+                "AWS access key ID: an access key prefix and 16 capital letters and digits from 2 to 7, not inside a longer run of base64 text; AWS's published example IDs are left out. Likely.",
+                "It has the shape of an AWS access key ID. That is half a credential; the secret key is often nearby.", "AWS access key IDs"),
+            new ContentRuleInfo("slack-token",
+                "Slack token: a bot, user, app or rotating token prefix, followed by the exact groups of digits and letters Slack uses. Likely.",
+                "It has the shape of a Slack token.", "Slack tokens"),
+            new ContentRuleInfo("slack-webhook",
+                "Slack webhook address: the hooks.slack.com services address with its team, channel and 24-character secret parts. Likely.",
+                "It is a Slack webhook address. Anyone who has it can post to that channel.", "Slack webhook addresses"),
+            new ContentRuleInfo("stripe-live-key",
+                "Stripe live secret key: a live secret or restricted key prefix and 24 to 247 letters and digits; test-mode keys are never looked for. Likely.",
+                "It has the shape of a Stripe live secret key.", "Stripe live secret keys"),
+            new ContentRuleInfo("google-api-key",
+                "Google API key: the Google key prefix and exactly 35 letters, digits, dashes and underscores; published sample keys are left out. Likely.",
+                "It has the shape of a Google API key. Keys in website code are often public by design; server and Gemini keys are not.", "Google API keys"),
+            new ContentRuleInfo("openai-key",
+                "OpenAI API key: a project, service account, admin or older key prefix, with the fixed marker OpenAI puts in the middle of every key. Likely.",
+                "It has the shape of an OpenAI API key.", "OpenAI API keys"),
+            new ContentRuleInfo("pem-private-key",
+                "Private key: a private key block with its begin line, at least 64 characters of base64 and the matching end line. Confirmed.",
+                "The file holds a private key. Tools such as local clusters create these; it matters most if the file is shared or synced.", "Private keys"),
+            new ContentRuleInfo("pem-private-key-encrypted",
+                "Private key (passphrase-protected): a private key block marked as encrypted by its label or its Proc-Type line. Confirmed.",
+                "The file holds a private key protected by a passphrase.", "Passphrase-protected private keys"),
+            new ContentRuleInfo("env-secret",
+                "Secret setting in a .env file: a setting whose name ends in a secret word such as PASSWORD, TOKEN, SECRET or API_KEY, with a value of 16 to 1024 characters that is not a placeholder or a reference to a secret manager. Likely.",
+                "A setting in this .env file is named like a secret and has a value.", "Secret settings")
+        };
 
         // Size bounds of the by-name rows. An online-only file (size 0 here) passes them, except the image minimum
         // for documents and the key-size windows, which then give no signal.
@@ -172,8 +332,8 @@ namespace DiskSpace
         public static readonly string[] LaterStages =
         {
             "NuGet API keys in %APPDATA%\\NuGet\\NuGet.Config: they sit in an encrypted section, so judging the file needs its contents.",
-            "Project .npmrc files and .yarnrc.yml: these usually hold registry settings only, so they need their contents.",
-            ".aws\\config, Docker config.json outside a .docker folder, and cloud service-account files with free-form names: they need their contents.",
+            "Project .npmrc files and .yarnrc.yml: these usually hold registry settings only, and npm tokens are not looked for yet.",
+            "Docker config.json outside a .docker folder: it is not found by name.",
             "Terraform .tfvars files, .pem and .key files inside your projects or in other folders, certificates in Temp, and keys under test folders: these need git status.",
             "Cargo's credentials.toml: .cargo stays a skipped folder in this stage.",
             "Notes holding wallet seed phrases or recovery codes under free-form names.",
@@ -186,7 +346,12 @@ namespace DiskSpace
             return new PatternInfo(id, kind, "name", tier);
         }
 
-        // Stage 1: findings by file name and location. Content patterns arrive in stage 2.
+        static PatternInfo C(string id, string kind, FindingTier tier)
+        {
+            return new PatternInfo(id, kind, "content", tier);
+        }
+
+        // The 38 rows found by file name and location (stage 1), then the 11 content rows (stage 2), in table order.
         public static readonly PatternInfo[] Patterns =
         {
             P("ssh-key", "SSH private key", FindingTier.Confirmed),
@@ -226,8 +391,21 @@ namespace DiskSpace
             P("doc-statement", "Bank or account statement", FindingTier.Likely),
             P("doc-pay", "Payslip", FindingTier.Likely),
             P("doc-id", "ID document", FindingTier.Likely),
-            P("doc-scans-folder", "Scanned documents folder", FindingTier.Likely)
+            P("doc-scans-folder", "Scanned documents folder", FindingTier.Likely),
+            C("github-token", "GitHub token", FindingTier.Confirmed),
+            C("github-fine-grained", "GitHub fine-grained token", FindingTier.Likely),
+            C("aws-access-key-id", "AWS access key ID", FindingTier.Likely),
+            C("slack-token", "Slack token", FindingTier.Likely),
+            C("slack-webhook", "Slack webhook address", FindingTier.Likely),
+            C("stripe-live-key", "Stripe live secret key", FindingTier.Likely),
+            C("google-api-key", "Google API key", FindingTier.Likely),
+            C("openai-key", "OpenAI API key", FindingTier.Likely),
+            C("pem-private-key", "Private key", FindingTier.Confirmed),
+            C("pem-private-key-encrypted", "Private key (passphrase-protected)", FindingTier.Confirmed),
+            C("env-secret", "Secret setting in a .env file", FindingTier.Likely)
         };
+
+        public const int NameRowCount = 38;  // the content rows follow the name rows in Patterns
 
         const string E = "Likely on your Desktop, in Downloads, in synced folders, on external drives or loose in your user folder";
 
@@ -488,6 +666,21 @@ namespace DiskSpace
     // "What Protect reads": the trust principles as facts about this build, generated from the constants above.
     static class ProtectInfo
     {
+        // A content-scan limit as Protect's texts write it: "1 MB" and "8 KB", not "1.00 MB". Only these texts
+        // drop the decimals; every other size in the app keeps Fmt.Size's fixed precision.
+        public static string Limit(long bytes)
+        {
+            string[] units = { "KB", "MB", "GB" };
+            long v = bytes;
+            int u = -1;
+            while (v >= 1024 && v % 1024 == 0 && u < units.Length - 1)
+            {
+                v /= 1024;
+                u++;
+            }
+            return u < 0 || v >= 1024 ? Fmt.Size(bytes) : v + " " + units[u];
+        }
+
         public static List<InfoSection> Describe()
         {
             var sections = new List<InfoSection>();
@@ -500,7 +693,7 @@ namespace DiskSpace
             sections.Add(new InfoSection("What every scan reads",
                 "File names, folder names, sizes, dates and attributes. This is what the app reads to measure space, and " +
                 "Protect uses the same scan.",
-                "No file is opened for its contents in a normal scan.",
+                "No file is opened for its contents unless you turn on the content scan.",
                 "To know where your folders are, Protect also asks Windows for your known folders (Downloads, Documents and " +
                 "the rest), reads two registry keys that list the folders your sync apps keep (HKLM and HKCU\\" +
                 ProtectConstants.SyncRootManagerKey + ", and HKCU\\" + ProtectConstants.OneDriveAccountsKey + "), and " +
@@ -555,23 +748,8 @@ namespace DiskSpace
                 "Compared by file count and total size on the drives connected now. Nothing is opened; a byte-for-byte check is a " +
                 "separate step on the Move page that asks first."));
 
-            sections.Add(new InfoSection("Waits for later stages", ProtectConstants.LaterStages));
-
-            if (contentPatterns > 0)
-            {
-                sections.Add(new InfoSection("What the content scan reads, only when you turn it on",
-                    "Text files up to " + Fmt.Size(ProtectConstants.MaxContentBytes) + ". A file whose first " +
-                    Fmt.Size(ProtectConstants.BinaryProbeBytes) + " contain a null byte is treated as binary and skipped.",
-                    "It never opens anything under these folders: " + string.Join(", ", ProtectConstants.SkipFolders) + ".",
-                    "It looks for " + contentPatterns + " kinds of secret with a known format. It does not score text for randomness.",
-                    "Files are opened read-only and shared, so nothing you are working on is blocked.",
-                    "Each file is read into one buffer that is cleared before the next file. When the scan ends, no content remains in memory."));
-            }
-            else
-            {
-                sections.Add(new InfoSection("The content scan",
-                    "This build does not read file contents. The content scan is a later stage, and it will be off until you turn it on."));
-            }
+            sections.Add(new InfoSection("What the content scan reads, only when you turn it on", ContentReadsLines()));
+            sections.Add(new InfoSection("What Protect does not look for yet", NotYetLines()));
 
             sections.Add(new InfoSection("What a finding shows",
                 "The file, its folder, what kind of thing it is, and for a content match the line number.",
@@ -603,6 +781,198 @@ namespace DiskSpace
                 sb.Append('\n');
             }
             return sb.ToString();
+        }
+
+        // ---- The content scan, in words (stage 2). Every number and list below comes from ProtectConstants. ----
+
+        static int ContentRowCount()
+        {
+            return ProtectConstants.ContentRules.Length;
+        }
+
+        static string Plural(long n, string one, string many)
+        {
+            return Fmt.Count(n) + " " + (n == 1 ? one : many);
+        }
+
+        // ContentSkipFolders without the entries SkipFolders already lists, so no folder is named twice.
+        static string[] ContentOnlyFolders()
+        {
+            var list = new List<string>();
+            foreach (string s in ProtectConstants.ContentSkipFolders)
+                if (Array.FindIndex(ProtectConstants.SkipFolders, x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase)) < 0) list.Add(s);
+            return list.ToArray();
+        }
+
+        // The AppData folders the content scan reads, besides Temp.
+        static string[] AppDataReadByContent()
+        {
+            var list = new List<string>();
+            foreach (string s in ProtectConstants.AppDataExamined)
+                if (!string.Equals(s, "Local\\Temp", StringComparison.OrdinalIgnoreCase)) list.Add(s);
+            return list.ToArray();
+        }
+
+        static string TextFilesSentence()
+        {
+            var never = new List<string>(ProtectConstants.TextNeverEnds);
+            never.AddRange(ProtectConstants.TextNeverClasses);
+            return "Text files with these extensions: " + string.Join(" ", ProtectConstants.TextExtensions) + "; these names: " +
+                   string.Join(" ", ProtectConstants.TextNames) + " (and config in a tool folder); and .env files (not .env.example " +
+                   "and other templates). Never: " + string.Join(", ", never) + ".";
+        }
+
+        static string BinarySentence()
+        {
+            return "A file is treated as binary and skipped if its first " + ProtectInfo.Limit(ProtectConstants.BinaryProbeBytes) +
+                   " contain a zero byte. UTF-16 files are skipped.";
+        }
+
+        const string SharedSentence = "Files are opened read-only and shared for reading, writing and deleting, so no other program is " +
+                                      "blocked. Windows may update their last-access time.";
+        const string MatchSentence = "A match is shown as a file and a line number. The key itself is never shown, copied or saved.";
+        public const string NothingKeptSentence = "Nothing read here is kept after the scan.";
+
+        static string SampleSentence()
+        {
+            // The 2 counts the two AWS documentation IDs, which the EXAMPLE ending rule leaves out.
+            return (ProtectConstants.SampleKeyCount + 2) + " published sample keys are never reported, and Stripe test-mode keys " +
+                   "are never looked for.";
+        }
+
+        static string[] ContentReadsLines()
+        {
+            var lines = new List<string>();
+            lines.Add(TextFilesSentence());
+            lines.Add("Only files of " + ProtectInfo.Limit(ProtectConstants.MaxContentBytes) + " or less. Compressed files are re-checked when opened.");
+            lines.Add(BinarySentence());
+            lines.Add("Never opened: " + string.Join(", ", ProtectConstants.SkipFolders) + ", folders starting with $, " +
+                      string.Join(", ", ContentOnlyFolders()) + ", test and example folders (" +
+                      string.Join(", ", ProtectConstants.FixtureFolders) + "), AppData except Temp and " +
+                      string.Join(", ", AppDataReadByContent()) + ", other dot folders in your user folder except " +
+                      string.Join(", ", ProtectConstants.ContentToolHomes) + ", editor extension folders, Rust target folders, " +
+                      "build output inside projects, and your trusted folders.");
+            lines.Add("Online-only files and links are never opened, so nothing is downloaded.");
+            lines.Add(ProtectConstants.NetworkDrivesNote);
+            lines.Add(SharedSentence);
+            lines.Add(ProtectConstants.ContentWorkers + " files are read at a time, at low priority. Each reader holds one " +
+                      ProtectInfo.Limit(ProtectConstants.MaxContentBytes) + " buffer, cleared after every file.");
+            lines.Add("No randomness scoring: a string is reported only if it has a known format.");
+            foreach (ContentRuleInfo r in ProtectConstants.ContentRules) lines.Add(r.Rule);
+            lines.Add(SampleSentence());
+            lines.Add(MatchSentence);
+            lines.Add(NothingKeptSentence);
+            return lines.ToArray();
+        }
+
+        static string[] NotYetLines()
+        {
+            var lines = new List<string>(ProtectConstants.ContentHeldBack);
+            lines.AddRange(ProtectConstants.LaterStages);
+            return lines.ToArray();
+        }
+
+        // The folders the content scan never opens, one per line, for the consent dialog's list box.
+        static string NeverOpenedList(int trustedFolders)
+        {
+            var lines = new List<string>(ProtectConstants.SkipFolders);
+            lines.Add("folders starting with $");
+            lines.AddRange(ContentOnlyFolders());
+            lines.Add("test and example folders");
+            lines.Add("AppData, except Temp and the tool folders Protect checks");
+            lines.Add("other dot folders in your user folder");
+            lines.Add("editor extension folders");
+            lines.Add("Rust target folders");
+            lines.Add("build output inside projects");
+            lines.Add("network drives and shares");
+            if (trustedFolders > 0) lines.Add("your " + Plural(trustedFolders, "trusted folder", "trusted folders"));
+            return string.Join("\n", lines);
+        }
+
+        // The consent dialog's body (section 7.2 of the stage 2 spec). Always 8 entries, in order: [0] what is read,
+        // [1] what is skipped, [2] the lead-in to the folder list, [3] the folder list for the list box (one folder per
+        // line, separated by "\n"), [4] no guessing, [5] read-only and shared, [6] how a match is shown, [7] the
+        // closing sentence, shown in bold.
+        public static string[] ContentDialog(ContentPlan plan, string rootLabel)
+        {
+            int files = plan != null ? plan.Files.Length : 0;
+            string first;
+            if (files == 0) first = "No text files in this scan qualify.";
+            else
+            {
+                first = "Protect will read " + Plural(files, "text file", "text files") + " (" + Fmt.Size(plan.TotalBytes) +
+                        ") found by this scan of " + rootLabel + ", each up to " + ProtectInfo.Limit(ProtectConstants.MaxContentBytes) +
+                        ". It looks for " + ContentRowCount() + " kinds of key with a known format, such as GitHub tokens, AWS " +
+                        "access keys and private keys.";
+            }
+            string second = "A file is treated as binary and skipped if its first " + ProtectInfo.Limit(ProtectConstants.BinaryProbeBytes) +
+                            " contain a zero byte. UTF-16 files are skipped too.";
+            int large = plan != null ? plan.TooLarge : 0, online = plan != null ? plan.OnlineOnly : 0;
+            if (large > 0 && online > 0)
+                second += " " + Plural(large, "larger text file", "larger text files") + " and " +
+                          Plural(online, "online-only file", "online-only files") + " are not read.";
+            else if (large > 0) second += " " + Plural(large, "larger text file is", "larger text files are") + " not read.";
+            else if (online > 0) second += " " + Plural(online, "online-only file is", "online-only files are") + " not read.";
+            return new[]
+            {
+                first,
+                second,
+                "It never opens anything in these folders:",
+                NeverOpenedList(plan != null ? plan.TrustedFolders : 0),
+                "It does not guess from random-looking text. Published sample keys are never reported.",
+                SharedSentence + " Online-only files are not opened, so nothing is downloaded.",
+                MatchSentence,
+                NothingKeptSentence
+            };
+        }
+
+        // The clean page's state line (section 7.6). nameFiles: files whose names Protect checked; readFiles: text
+        // files read in this scan; planFiles: text files in the plan.
+        public static string ContentSummary(int nameFiles, long readFiles, long planFiles, int patterns, bool on, bool ran, bool stopped)
+        {
+            string head = "Nothing to review. Protect checked the names of " + Plural(nameFiles, "file", "files");
+            if (!on) return head + ". The content scan is off.";
+            if (stopped)
+                return head + " and read " + Fmt.Count(readFiles) + " of " + Plural(planFiles, "text file", "text files") +
+                       " before you stopped it.";
+            if (!ran) return head + ". Text files are read after each scan.";
+            return head + " and found no keys in " + Plural(readFiles, "text file", "text files") + " with " + patterns +
+                   " patterns; content scan on.";
+        }
+
+        // The collapsed "What Protect does not look for" list under the clean state.
+        public static string[] NotLookedFor(int tooLarge, int onlineOnly)
+        {
+            var lines = new List<string>();
+            lines.Add("Keys without a fixed format.");
+            lines.Add("Passwords in documents.");
+            lines.Add("Files over " + ProtectInfo.Limit(ProtectConstants.MaxContentBytes) +
+                      (tooLarge > 0 ? " (" + Fmt.Count(tooLarge) + " in this scan)." : "."));
+            lines.Add("Binary and UTF-16 files.");
+            lines.Add("Online-only files" + (onlineOnly > 0 ? " (" + Fmt.Count(onlineOnly) + " in this scan)." : "."));
+            lines.Add("Files in the folders the content scan skips, listed under What Protect reads.");
+            lines.AddRange(ProtectConstants.ContentHeldBack);
+            return lines.ToArray();
+        }
+
+        // The first line of dsa --protect output.
+        public static string CliHeader(bool contentRan, long files, int patterns)
+        {
+            if (!contentRan) return "Protect: found by file name and location. Nothing was opened.";
+            return "Protect: found by name, and by reading " + Plural(files, "text file", "text files") + " with " + patterns + " patterns.";
+        }
+
+        // The groups of a card (one per file), shared by the page and dsa so they cannot drift (section 5.4).
+        public const int GroupReview = 0, GroupUsual = 1, GroupProjects = 2;
+
+        // f: the card's lead finding. hasUsual: the path has a finding in its usual place (by name, or a content
+        // finding in a tool home). onlyEnvSecretInRepo: a repository dotenv file whose only content findings are
+        // env-secret (a repository .env found by name only counts as this too). Only GroupReview is counted.
+        public static int GroupOf(Finding f, bool hasUsual, bool onlyEnvSecretInRepo)
+        {
+            if (hasUsual || (f != null && f.Place == Place.UsualPlace)) return GroupUsual;
+            if (onlyEnvSecretInRepo) return GroupProjects;
+            return GroupReview;
         }
     }
 }

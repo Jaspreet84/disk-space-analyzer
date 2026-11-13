@@ -106,46 +106,115 @@ Nothing is suggested if the target would drop below 10% free.
 
 ## Protect, and the trust checks
 
-The Protect page shows which files would hurt if they leaked and which would hurt if a drive died. It works from file names, folders, sizes and dates only: it does not open your files.
+The Protect page shows which files would hurt if they leaked and which would hurt if a drive died. A normal scan works from file names, folders, sizes and dates only: it does not open your files. It reads small text files only if you turn on the content scan.
 
 - **Keys and sign-ins.** It finds about 30 kinds of credential file by name and place: SSH and PuTTY keys, private key files, `.pfx` certificates, password vaults and exported passwords, cloud and developer tool sign-ins (AWS, Azure, Google Cloud, GitHub CLI, Kubernetes, Docker, npm, PyPI, .NET user secrets, Terraform), `.env` files, crypto wallets and recovery codes. A file where its tool keeps it is listed in a collapsed "In their usual places" group and not counted. A copy in Downloads, on the Desktop, in a synced folder or on an external drive is listed for review.
+- **Keys inside text files (off until you turn it on).** The switch "Look inside text files for keys" reads text files of 1 MB or less and looks for 11 kinds of key that have a fixed format: GitHub tokens (their checksum must verify), GitHub fine-grained tokens, AWS access key IDs, Slack tokens and webhook addresses, Stripe live secret keys, Google API keys, OpenAI keys, private key blocks (with or without a passphrase), and settings named like a secret in `.env` files. A match is shown as a file and a line number. The key itself is never shown, copied or saved, and nothing read is kept after the scan.
+  - Before it starts, a dialog says how many files it will read and which folders it never opens: package and build folders, test and example folders, most of AppData, editor extension folders, your trusted folders, and others. Online-only files are not opened, so nothing is downloaded. When you scan a network drive or a shared folder on another computer, no file contents are read at all, so nothing is copied over the network.
+  - Files are opened read-only and shared for reading, writing and deleting, so no other program is blocked. Four files are read at a time, at low priority. Windows may update a file's last-access time.
+  - It does not guess from random-looking text, and published sample keys are never reported. Binary files, UTF-16 files and files over 1 MB are not read. The page's "What Protect does not look for" list names what it leaves out.
+  - The switch is remembered. Once it is on, text files are read again after each scan, and after you recycle or rescan something only that folder is read again. Turning it off clears its findings.
+  - While it runs you can keep using the app. Cancel stops it and keeps what it found so far. A folder you trust while it runs is left out straight away.
 - **Personal documents.** Tax forms, bank statements, payslips and ID documents, matched by name with guards against look-alikes (a camera photo named `t4-...jpg` is not a tax slip).
 - **Copies of your folders.** For Documents, Pictures, large photo and backup folders, and folders holding personal documents, it checks whether a copy with the same files and sizes exists on another connected drive. A synced cloud folder is shown as synced, never counted as a copy. Folders with one copy get a "Copy to…" button that uses the Move page's checked copy.
-- **Hide and trust.** Hide a finding or trust a folder; both can be undone, and only a hash of each is kept.
-- **Not yet:** reading file contents for secrets (stage 2, off until you turn it on), and git status for files inside projects (stage 3). `.env` files in projects are listed separately and not counted until then.
+- **Hide and trust.** Hide a finding or trust a folder; both can be undone, and only a hash of each is kept. Hiding a key found in a file hides that kind of key in that file; a new kind of key in the same file still shows. Trusted folders are never read by the content scan.
+- **Not yet:** git status for files inside projects (stage 3). `.env` files in projects are listed separately and not counted until then, unless the content scan finds a key with a known format in one.
 
-`dsa <path> --protect [--all] [--coverage]` prints the same findings in a terminal.
+`dsa <path> --protect [--all] [--coverage]` prints the same findings in a terminal. Add `--content` to read text files as well, and `--findings` to print why each match was reported. Each match is printed as `line 12:5`, the kind of key, its tier, its place and the path; the key is never printed. The command line reads file contents only when `--content` is passed: the app's saved switch does not turn it on there. Press Ctrl+C to stop; the matches found so far are printed.
 
 The rules the page is built on are enforced by the build:
 
 - **No network code.** The app contains none; it is not switched off, it is absent. The build fails if either program names a `System.Net` type or references a `System.Net` assembly.
 - **Protect never writes a file.** The Protect source files may not call anything that writes, deletes or moves, except the two marked lines that save its own settings file. The build checks this too.
-- **Protect never reads a file's contents.** The Protect source files may not call anything that reads a file, except the one marked line that loads its own settings file. The build checks this too.
-- **A finding has no room for a value.** The `Finding` type holds a pattern id, a path, a line and column, and a place. The tests check the field list.
+- **Protect reads file contents in one place only.** The content scan's reader is one marked region in `src\SecretScan.cs`. It holds every Windows call in that file and exactly one open call, which asks for read access to an existing file only. The build checks the values behind the names on that call too, so a constant cannot be quietly changed to ask for write access. Outside that region, no Protect source file may call anything that reads a file, except the one marked line that loads its own settings file.
+- **What is read never becomes text.** `SecretScan.cs` may not convert bytes to a string, copy them, log them or hash them, and it allocates exactly one buffer per reader, which is cleared after every file.
+- **A finding has no room for a value.** The `Finding` type holds a pattern id, a path, a line and column, and a place. The tests check the field list, and the build checks that `SecretScan.cs` creates a finding in one place only.
+- **The content scan needs your consent.** It cannot start without a consent value that comes either from the switch you turned on or from `--content` on the command line, and the build checks that only the command line uses the second one.
+- **The reader is walled off.** `SecretScan.cs` may use only the scan's own tree types from the rest of the app, so it cannot pass what it reads to other code.
 - **Settings hold no paths in clear.** `%LOCALAPPDATA%\DiskSpaceAnalyzer\protect.json` keeps the content-scan switch and a hash per dismissed finding and trusted folder, nothing else.
 - **The app explains itself from its own code.** The Protect page's "What Protect reads" is generated from the same constants the scanner uses, so it describes the build you are running. `dsa --protect-info` prints the same text.
 
-To repeat the no-network check on the built programs:
+To repeat these checks on the built programs and the source:
 
 ```
 powershell -ExecutionPolicy Bypass -File tools\check-trust.ps1
 ```
 
-It compiles a small checker (`tools\CheckTrust.cs`) that reads each program's metadata and lists every `System.Net` name it finds. To see the same thing from the outside, open Resource Monitor's Network tab while a scan runs: the app never appears.
+It compiles a small checker (`tools\CheckTrust.cs`) that reads each program's metadata and lists every `System.Net` name it finds, then checks the Protect source files. To see the same thing from the outside, open Resource Monitor's Network tab while a scan runs: the app never appears.
 
-To run the tests, which also plant network calls, file writes and file reads to confirm the checks catch them, and measure every matcher against the 192 cases in `tests\protect-corpus`:
+### Check it yourself: no network traffic during a content scan
+
+The no-network check above is done at build time. This test confirms it while the programs run, with Windows' own firewall log. It needs administrator rights, so run it yourself in an elevated PowerShell from the repository root:
+
+1. Note the current audit setting, so you can put it back at the end:
+
+   ```
+   auditpol /get /subcategory:"Filtering Platform Connection"
+   ```
+
+2. Turn on logging of allowed and blocked connections:
+
+   ```
+   auditpol /set /subcategory:"Filtering Platform Connection" /success:enable /failure:enable
+   ```
+
+3. Block both programs from going out:
+
+   ```
+   New-NetFirewallRule -DisplayName dsa-block-cli -Direction Outbound -Action Block -Program "$PWD\bin\dsa.exe"
+   New-NetFirewallRule -DisplayName dsa-block-app -Direction Outbound -Action Block -Program "$PWD\bin\DiskSpaceAnalyzer.exe"
+   ```
+
+4. Run a content scan from the command line, then from the app:
+
+   ```
+   $start = Get-Date
+   bin\dsa.exe C:\ --protect --content --timing > $null
+   ```
+
+   Then open the app, scan C:, turn on "Look inside text files for keys", and wait for "Content scan done".
+
+5. Count the connection events for either program since `$start`:
+
+   ```
+   Get-WinEvent -FilterHashtable @{LogName='Security'; Id=5156,5157; StartTime=$start} | Where-Object { $_.Message -match 'dsa\.exe|DiskSpaceAnalyzer\.exe' } | Measure-Object
+   ```
+
+   The expected Count is **0**: no connection was allowed and none was even attempted and blocked.
+
+6. Clean up: remove the two rules, and set auditpol back to what step 1 showed (for example `auditpol /set /subcategory:"Filtering Platform Connection" /success:disable /failure:disable` if both were off):
+
+   ```
+   Remove-NetFirewallRule -DisplayName dsa-block-cli,dsa-block-app
+   ```
+
+Record the result in `tests.md`.
+
+### Tests
+
+To run the tests, which also plant network calls, file writes, file reads and the other trust breaks to confirm the checks catch them, and measure every matcher against the cases in `tests\protect-corpus`:
 
 ```
 powershell -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
+The by-name corpus has 192 cases. The content corpus holds recipes, not keys. This repository is public, and GitHub's push protection refuses any push that contains a real-looking key, so no file in it holds a key in a valid format. Each test file is a template with recipes such as `<<google:ok:7>>`; the tests build the real files from them in `%TEMP%\dsa-content-<guid>` while they run, and delete them afterwards. The tests also run every matcher over the templates, the corpus notes and `cases.tsv`, and fail if any of them would be reported as a key.
+
+To time the content scan of C: (run it once right after a reboot for the cold figure; the budget is 180 s from start to the end of the content scan):
+
+```
+powershell -ExecutionPolicy Bypass -File tests\bench-content.ps1
+```
+
+It prints counts and timings only.
+
 ## Command-line version
 
 ```
-dsa <drive or folder> [--depth N] [--top N] [--csv file.csv] [--moves] [--protect [--all] [--coverage]]
+dsa <drive or folder> [--depth N] [--top N] [--csv file.csv] [--moves] [--protect [--all] [--coverage] [--content] [--findings]]
 ```
 
-For example, `dsa C: --depth 3 --top 15` lists the largest folders three levels deep. It also lists the largest files, space per category and the top extensions. Use `--csv` to write every folder to a file. `--moves` lists your drives and the Move page's suggestions instead.
+For example, `dsa C: --depth 3 --top 15` lists the largest folders three levels deep. It also lists the largest files, space per category and the top extensions. Use `--csv` to write every folder to a file. `--moves` lists your drives and the Move page's suggestions instead. `--protect` lists the Protect page's findings, `--content` also reads text files for keys, and `--findings` adds why each match was reported (see "Protect, and the trust checks" above).
 
 ## How sizes are counted
 

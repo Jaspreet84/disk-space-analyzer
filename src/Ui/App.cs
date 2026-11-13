@@ -13,6 +13,7 @@ namespace DiskSpace
     {
         public string ScanPath, Snapshot, Page, Explore, Select, Dialog;
         public int Highlight = -1;
+        public int Width;  // --width: the snapshot window width, at least the window minimum
         public ThemeChoice? Theme;
 
         public static Options Parse(string[] args)
@@ -28,6 +29,7 @@ namespace DiskSpace
                 else if (a == "--select" && next != null) { o.Select = next; i++; }
                 else if (a == "--dialog" && next != null) { o.Dialog = next; i++; }
                 else if (a == "--highlight" && next != null) { int.TryParse(next, out o.Highlight); i++; }
+                else if (a == "--width" && next != null) { int.TryParse(next, out o.Width); i++; }
                 else if (a == "--theme" && next != null)
                 {
                     ThemeChoice t;

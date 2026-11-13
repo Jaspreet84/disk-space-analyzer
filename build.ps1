@@ -17,7 +17,7 @@ if (-not (Test-Path $csc)) { throw 'The .NET Framework 4.x C# compiler (csc.exe)
 
 New-Item -ItemType Directory -Force $bin, $obj | Out-Null
 
-$common = 'Native.cs', 'Model.cs', 'Scanner.cs', 'Placement.cs', 'Protect.cs', 'ProtectContext.cs', 'ProtectNames.cs', 'ProtectCoverage.cs', 'AppIcon.cs', 'Program.cs' | ForEach-Object { Join-Path $src $_ }
+$common = 'Native.cs', 'Model.cs', 'Scanner.cs', 'Placement.cs', 'Protect.cs', 'ProtectContext.cs', 'ProtectNames.cs', 'ProtectCoverage.cs', 'SecretScan.cs', 'AppIcon.cs', 'Program.cs' | ForEach-Object { Join-Path $src $_ }
 $options = @('/nologo', '/optimize+', '/codepage:65001', '/platform:anycpu', "/win32manifest:$src\app.manifest",
              '/r:System.dll', '/r:System.Core.dll', '/r:System.Drawing.dll', '/r:System.Management.dll')
 
@@ -39,7 +39,8 @@ $xaml = Get-ChildItem $ui -Filter *.xaml | ForEach-Object { "/resource:$($_.Full
 & $csc @options @wpf @xaml /target:winexe "/win32icon:$icon" "/out:$bin\DiskSpaceAnalyzer.exe" @common @app
 if ($LASTEXITCODE -ne 0) { throw 'DiskSpaceAnalyzer.exe failed to build.' }
 
-# The Protect page's guarantees: no network code anywhere, no file writes in Protect. A failure fails the build.
+# The Protect page's guarantees (checks 1 to 7): no network code anywhere, no file writes in Protect, and file
+# contents read only in the one audited region of SecretScan.cs. A failure fails the build.
 & (Join-Path $root 'tools\check-trust.ps1')
 
 Write-Host "Done. Run $bin\DiskSpaceAnalyzer.exe"

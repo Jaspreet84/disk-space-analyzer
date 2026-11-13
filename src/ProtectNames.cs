@@ -14,7 +14,8 @@ namespace DiskSpace
     enum DirFlags : ushort
     {
         None = 0, Skip = 1, Fixture = 2, AppData = 4, Examined = 8, MailAttach = 16,
-        DotOther = 32, BuildOut = 64, External = 128, VaultFolder = 256, ToolCache = 512
+        DotOther = 32, BuildOut = 64, External = 128, VaultFolder = 256, ToolCache = 512,
+        NoContent = 1024  // the content scan reads no file in this folder or below it (section 2.1 of the stage 2 spec)
     }
 
     enum ToolHome : byte
@@ -38,6 +39,7 @@ namespace DiskSpace
         public int ScansSlot;      // 0 = none, else 1 + index of the pending Scanned Documents folder above
         public bool IsScansFolder; // this folder itself is named "Scanned Documents"
         public string Name, ParentName;
+        public bool InRepo;        // content scan: this folder or one above holds .git; set by Analyze for content folders
     }
 
     struct NameMatch { public string PatternId; public FindingTier Tier; public Place Place; }  // PatternId == null: no finding
@@ -76,7 +78,7 @@ namespace DiskSpace
         const int SegStem = 0, SegDir = 1, SegParent = 2, SegOther = 3;
         const int MaskStem = 1, MaskAll = 1 | 2 | 4;
 
-        const byte KindSkip = 1, KindFixture = 2, KindBuild = 4, KindPairSecond = 8;
+        const byte KindSkip = 1, KindFixture = 2, KindBuild = 4, KindPairSecond = 8, KindContentSkip = 16, KindContentPair = 32;
 
         static readonly Dictionary<string, byte> folderKinds = new Dictionary<string, byte>(new QuickNoCase());
         static readonly Dictionary<string, List<string>> pairFirsts = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
@@ -84,6 +86,12 @@ namespace DiskSpace
         static readonly Dictionary<string, ToolHome> roamingTools = new Dictionary<string, ToolHome>(StringComparer.OrdinalIgnoreCase);
         static readonly Dictionary<string, byte> extHints = new Dictionary<string, byte>(StringComparer.Ordinal);
         static readonly HashSet<string> exactNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // The content scan's tables, built from ProtectConstants in the static constructor.
+        static readonly Dictionary<string, List<string>> contentPairFirsts = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        static readonly HashSet<string> textExtensions = new HashSet<string>(StringComparer.Ordinal);
+        static readonly HashSet<string> textNames = new HashSet<string>(new QuickNoCase());
+        static readonly HashSet<string> contentToolHomes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         static readonly string[] dotNames = { ".git-credentials", ".netrc", "_netrc", ".npmrc", ".pypirc", ".pgpass", ".htpasswd" };
         static readonly string[] sshKeyNames = { "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ecdsa_sk", "id_ed25519_sk" };
@@ -136,6 +144,21 @@ namespace DiskSpace
                 if (!pairFirsts.TryGetValue(second, out firsts)) { firsts = new List<string>(); pairFirsts[second] = firsts; }
                 firsts.Add(first);
             }
+            foreach (string s in ProtectConstants.ContentSkipFolders)
+            {
+                if (s.IndexOf(' ') >= 0) continue;  // an anchored rule written in words; ProtectScan.Enter applies it
+                string[] parts = s.Split('\\');
+                if (parts.Length == 1) { AddKind(s, KindContentSkip); continue; }
+                // A longer chain (go\pkg\mod) is covered by its first pair, which is a skip folder already.
+                if (parts.Length > 2) continue;
+                AddKind(parts[1], KindContentPair);
+                List<string> firsts;
+                if (!contentPairFirsts.TryGetValue(parts[1], out firsts)) { firsts = new List<string>(); contentPairFirsts[parts[1]] = firsts; }
+                firsts.Add(parts[0]);
+            }
+            foreach (string e in ProtectConstants.TextExtensions) textExtensions.Add(e);
+            foreach (string n in ProtectConstants.TextNames) textNames.Add(n);
+            foreach (string n in ProtectConstants.ContentToolHomes) contentToolHomes.Add(n);
             foreach (string s in ProtectConstants.FixtureFolders) AddKind(s, KindFixture);
             foreach (string s in ProtectConstants.BuildOutputFolders) AddKind(s, KindBuild);
 
@@ -518,10 +541,21 @@ namespace DiskSpace
             s.AppDepth = (marksHere & (PlaceMarks.Roaming | PlaceMarks.Local)) != 0 ? (byte)1 : Inc(parent.AppDepth);
             s.ToolDepth = Inc(parent.ToolDepth);
             if (name.Length == 0) return s;
-            if (marksHere == PlaceMarks.None && StaysEmpty(parent)) return s;  // nothing below can be found: skip the name tests
+            // The content scan's folder rule comes first, so it also holds below the folders where the by-name rows
+            // stop looking. NoContent is inherited through the copy of the parent's state. One lookup of the name
+            // serves both.
+            bool staysEmpty = StaysEmpty(parent);
+            bool contentOpen = (parent.Flags & DirFlags.NoContent) == 0;
+            bool namesDone = marksHere == PlaceMarks.None && staysEmpty;  // nothing below can be found by name
+            byte kind = 0;
+            bool hasKind = !first && ((contentOpen && !staysEmpty) || !namesDone) && kindEnds[EndsKey(name)] &&
+                           folderKinds.TryGetValue(name, out kind);
+            if (contentOpen && (staysEmpty ||
+                ContentSkipName(name, parent.Name, first, (marksHere & (PlaceMarks.Home | PlaceMarks.HomeAbove)) != 0, hasKind, kind)))
+                s.Flags |= DirFlags.NoContent;
+            if (namesDone) return s;
 
-            byte kind;
-            if (!first && kindEnds[EndsKey(name)] && folderKinds.TryGetValue(name, out kind))
+            if (hasKind)
             {
                 // Fixture and build names are about folders inside projects. The user folder, and the folders
                 // that hold it, can have any name: a profile called "Test" or "Demo" silences nothing.
@@ -614,13 +648,146 @@ namespace DiskSpace
 
             if (EndsCI(name, ".opvault") || EndsCI(name, ".agilekeychain")) s.Flags |= DirFlags.VaultFolder;
             if (c0 == 'S' || c0 == 's') s.IsScansFolder = EqCI(name, "Scanned Documents");
+            if ((s.Flags & DirFlags.NoContent) == 0 && ContentSkipByPlace(parent, s, name, marksHere)) s.Flags |= DirFlags.NoContent;
             return s;
+        }
+
+        // Rules 3, 4, 7 and the extensions part of rule 8 of the content scan's folder rule: skip folders, folders
+        // starting with $, test and example folders (not the user folder or the folders that hold it), the content
+        // scan's own skip folders, and an editor's extensions folder inside a dot folder.
+        static bool ContentSkipName(string name, string parentName, bool first, bool homePath, bool hasKind, byte kind)
+        {
+            if (first) return false;
+            if (name[0] == '$') return true;
+            if (hasKind)
+            {
+                if ((kind & (KindSkip | KindContentSkip)) != 0) return true;
+                if ((kind & KindFixture) != 0 && !homePath) return true;
+                if ((kind & KindPairSecond) != 0 && PairMatch(pairFirsts, name, parentName)) return true;
+                if ((kind & KindContentPair) != 0 && PairMatch(contentPairFirsts, name, parentName)) return true;
+            }
+            return parentName != null && parentName.Length > 0 && parentName[0] == '.' && EqCI(name, "extensions");
+        }
+
+        static bool PairMatch(Dictionary<string, List<string>> table, string name, string parentName)
+        {
+            if (parentName == null) return false;
+            List<string> firsts;
+            if (!table.TryGetValue(name, out firsts)) return false;
+            foreach (string f in firsts)
+                if (EqCI(parentName, f)) return true;
+            return false;
+        }
+
+        // Rules 5 and 6: AppData outside Temp and the examined tool folders, and the dot folders of the user folder
+        // that are not tool homes (.codex and .claude included). The folders on the way to an examined folder
+        // (AppData, Roaming, Local, Roaming\Microsoft, Roaming\Electrum, Roaming\Ethereum) stay open as folders;
+        // their own files are left out by ContentFilesHere.
+        static bool ContentSkipByPlace(DirState parent, DirState s, string name, PlaceMarks marksHere)
+        {
+            if (s.Tool == ToolHome.Codex || s.Tool == ToolHome.Claude) return true;
+            if ((s.Flags & DirFlags.DotOther) != 0 && !(s.HomeDepth == 2 && EqCI(name, ".config"))) return true;
+            if ((s.Flags & DirFlags.AppData) == 0 || (s.Flags & DirFlags.Examined) != 0 || s.Tool != ToolHome.None) return false;
+            if ((parent.Flags & DirFlags.AppData) == 0) return false;                       // AppData itself
+            if ((marksHere & (PlaceMarks.Roaming | PlaceMarks.Local)) != 0) return false;   // Roaming, Local
+            bool roamingChild = parent.AppDepth == 1 && (parent.Marks & PlaceMarks.Roaming) != 0 && (parent.Marks & PlaceMarks.Local) == 0;
+            if (roamingChild && (EqCI(name, "Microsoft") || EqCI(name, "Electrum") || EqCI(name, "Ethereum"))) return false;
+            return true;
+        }
+
+        // Whether the content scan may take files directly in this folder.
+        internal static bool ContentFilesHere(DirState s)
+        {
+            if ((s.Flags & (DirFlags.NoContent | DirFlags.DotOther)) != 0) return false;
+            return (s.Flags & DirFlags.AppData) == 0 || (s.Flags & DirFlags.Examined) != 0 || s.Tool != ToolHome.None;
+        }
+
+        // A folder name the stage 1 skip list covers: a SkipFolders entry (the two-segment ones by their parent's
+        // name), or a name starting with $.
+        internal static bool IsSkipName(string name, string parentName)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (name[0] == '$') return true;
+            byte kind;
+            if (!folderKinds.TryGetValue(name, out kind)) return false;
+            if ((kind & KindSkip) != 0) return true;
+            return (kind & KindPairSecond) != 0 && PairMatch(pairFirsts, name, parentName);
+        }
+
+        // A tool home whose files the content scan reads: ProtectConstants.ContentToolHomes, the .config ones by
+        // their parent's name.
+        internal static bool IsToolHome(string name, string parentName)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (EqCI(parentName, ".config")) return contentToolHomes.Contains(".config\\" + name);
+            return name[0] == '.' && contentToolHomes.Contains(name);
+        }
+
+        internal static bool IsTextExtension(string extKey)
+        {
+            return extKey != null && textExtensions.Contains(extKey);
+        }
+
+        // A quick test for the names that can be text without a text extension: dot and underscore names (.env
+        // files, .npmrc, _netrc), credentials, config and id_ keys. It must let through every name that
+        // ContentKindOf can accept with text class 0.
+        internal static bool MayBeTextName(string name)
+        {
+            int n = name.Length;
+            if (n < 4) return false;
+            char c = name[0];
+            if (c == '.' || c == '_') return true;
+            if (c == 'c' || c == 'C') return n == 6 || n == 11;
+            if (c == 'i' || c == 'I') return name[2] == '_' && (name[1] == 'd' || name[1] == 'D');
+            return false;
+        }
+
+        // Computed once per extension key in Analyze: 0 not a text extension, 1 a text extension, 2 a text extension
+        // that a TextNeverEnds entry ends with (".js" for ".min.js"), so the name's ending must be checked too.
+        internal static byte TextClassOf(string extKey)
+        {
+            if (!IsTextExtension(extKey)) return 0;
+            foreach (string end in ProtectConstants.TextNeverEnds)
+                if (EndsCI(end, extKey)) return 2;
+            return 1;
+        }
+
+        // The content kind of a file name, or 0 when the content scan does not read it. textClass is
+        // ExtInfo.TextClass; inToolHome is true when the folder is a tool home (config counts only there).
+        internal static ContentKind ContentKindOf(string name, byte textClass, bool inToolHome, char[] buffer)
+        {
+            if (string.IsNullOrEmpty(name)) return 0;
+            if (IsDotenvName(name, buffer)) return ContentKind.Dotenv;
+            if (textClass != 0)
+            {
+                if (textClass == 2)
+                    foreach (string end in ProtectConstants.TextNeverEnds)
+                        if (EndsCI(name, end)) return 0;
+                return ContentKind.Text;
+            }
+            if (textNames.Contains(name)) return ContentKind.Text;
+            return inToolHome && EqCI(name, "config") ? ContentKind.Text : 0;
+        }
+
+        // The stage 1 dotenv name rule: .env, .env.<name> except the template words, and <name>.env with a secret word.
+        internal static bool IsDotenvName(string name)
+        {
+            return IsDotenvName(name, null);
+        }
+
+        internal static bool IsDotenvName(string name, char[] buffer)
+        {
+            // Every dotenv name starts or ends with ".env"; most names fail this before any token work.
+            if (string.IsNullOrEmpty(name) || name.Length < 4) return false;
+            if (!StartsCI(name, ".env") && !EndsCI(name, ".env")) return false;
+            var t = new Toks(buffer);
+            return IsDotenvName(name, ref t);
         }
 
         // Whether every folder below this one is a folder where nothing can be found, whatever its name: below a
         // fixture folder or a tool cache, deep in a dot folder of the profile, or deep in AppData (the examined
         // exceptions and the Mail cache all start within two levels of Roaming or Local).
-        static bool StaysEmpty(DirState parent)
+        internal static bool StaysEmpty(DirState parent)
         {
             if ((parent.Flags & (DirFlags.Fixture | DirFlags.ToolCache)) != 0) return true;
             if ((parent.Flags & DirFlags.DotOther) != 0 && parent.HomeDepth >= 3) return true;
@@ -689,7 +856,7 @@ namespace DiskSpace
         }
 
         // The repository is asked last, and only when the earlier places did not match.
-        static Place PlaceOf(DirState dir, ref RepoQuery repo, int adjust)
+        internal static Place PlaceOf(DirState dir, ref RepoQuery repo, int adjust)
         {
             if ((dir.Marks & PlaceMarks.Sync) != 0) return Place.Synced;
             if ((dir.Flags & DirFlags.External) != 0) return Place.ExternalDrive;
@@ -1734,12 +1901,19 @@ namespace DiskSpace
         readonly List<bool> scansHit = new List<bool>();
         DirNode siblingsOf;
         List<string> siblingNames;
+        readonly ScanResult result;
+        // Kept as small structs during the walk; the candidate objects are made once, in Finish.
+        struct PendingContent { public FileNode Node; public Place Place; public ContentKind Kind; }
+        readonly List<PendingContent> contentCandidates = new List<PendingContent>();
+        int contentOnlineOnly, contentSkippedFolders;
+        public int ContentTooLarge;  // Analyze counts the plain text files over the limit itself, without a call
 
         public DirState RootState;
 
         public ProtectScan(ScanResult r, ProtectContext ctx)
         {
             this.ctx = ctx;
+            result = r;
             foreach (KeyValuePair<string, PlaceMarks> place in ctx.AllPlaces())
             {
                 DirNode d = r.FindNode(place.Key) as DirNode;
@@ -1759,6 +1933,13 @@ namespace DiskSpace
                 if (d != null) repoNodes.Add(d);
             }
             RootState = ProtectNames.RootState(r.Root.Name, ctx);
+            RootState.InRepo = rootInRepo;
+            // A scan of a network drive or share reads no file contents: each file would come over the network.
+            if (ProtectContext.IsNetworkPath(r.Root.Name) && (RootState.Flags & DirFlags.NoContent) == 0)
+            {
+                RootState.Flags |= DirFlags.NoContent;
+                contentSkippedFolders++;
+            }
             if (RootState.IsScansFolder && (RootState.Flags & DirFlags.Skip) == 0) Register(ref RootState, r.Root);
         }
 
@@ -1767,6 +1948,12 @@ namespace DiskSpace
             PlaceMarks m = PlaceMarks.None;
             if (marks.Count > 0 && UnderMarkParent(dir)) marks.TryGetValue(dir, out m);
             DirState s = ProtectNames.Enter(parent, dir.Name, m, ctx);
+            if ((parent.Flags & DirFlags.NoContent) == 0)
+            {
+                if ((s.Flags & DirFlags.NoContent) == 0 && AnchoredNoContent(dir)) s.Flags |= DirFlags.NoContent;
+                // Counted once, at the first folder that a skip rule (not the stays-empty rule) closes.
+                if ((s.Flags & DirFlags.NoContent) != 0 && !ProtectNames.StaysEmpty(parent)) contentSkippedFolders++;
+            }
             if ((s.Flags & DirFlags.Skip) != 0) return s;
             if ((s.Flags & DirFlags.VaultFolder) != 0 && (parent.Flags & DirFlags.VaultFolder) == 0)
             {
@@ -1775,6 +1962,90 @@ namespace DiskSpace
             }
             if (s.IsScansFolder) Register(ref s, dir);
             return s;
+        }
+
+        // Rule 8 of the content scan's folder rule, for the generic names that need the tree to judge: target beside
+        // a Cargo.toml, vendor beside composer.json or go.mod, env or venv holding pyvenv.cfg, and build output
+        // names inside a repository. User folders with these names elsewhere stay open.
+        bool AnchoredNoContent(DirNode dir)
+        {
+            string n = dir.Name;
+            if (string.IsNullOrEmpty(n) || n.Length > 13) return false;
+            switch (n[0] | 0x20)
+            {
+                case 't':
+                    return ProtectNames.EqCI(n, "target") && HasFileChild(dir.Parent, "Cargo.toml", null);
+                case 'v':
+                    if (ProtectNames.EqCI(n, "vendor")) return HasFileChild(dir.Parent, "composer.json", "go.mod");
+                    return ProtectNames.EqCI(n, "venv") && HasFileChild(dir, "pyvenv.cfg", null);
+                case 'e':
+                    return ProtectNames.EqCI(n, "env") && HasFileChild(dir, "pyvenv.cfg", null);
+                case 'b':
+                case 'o':
+                case 'i':
+                    return (ProtectNames.EqCI(n, "bin") || ProtectNames.EqCI(n, "build") || ProtectNames.EqCI(n, "obj") ||
+                            ProtectNames.EqCI(n, "out") || ProtectNames.EqCI(n, "intermediates")) && InRepo(dir.Parent);
+            }
+            return false;
+        }
+
+        static bool HasFileChild(DirNode d, string a, string b)
+        {
+            if (d == null) return false;
+            Node[] kids = d.Children;
+            for (int i = 0; i < kids.Length; i++)
+            {
+                if (!(kids[i] is FileNode)) continue;
+                string k = kids[i].Name;
+                if (ProtectNames.EqCI(k, a) || (b != null && ProtectNames.EqCI(k, b))) return true;
+            }
+            return false;
+        }
+
+        // A file the content scan may read (section 2.2 of the stage 2 spec). Analyze calls it only for files in a
+        // folder where ProtectNames.ContentFilesHere holds, and only when the extension is text or the first char
+        // can start a text name. Nothing is opened: names, flags and sizes only.
+        public void ContentFile(FileNode f, byte textClass, ref DirState dir)
+        {
+            FileFlags flags = f.Flags;
+            if ((flags & FileFlags.Link) != 0) return;
+            long size = f.Size;
+            bool online = (flags & FileFlags.OnlineOnly) != 0;
+            if (size < 1 && !online) return;
+            ContentKind kind;
+            if (textClass == 1)
+            {
+                // A plain text extension is text whatever the name: the name only decides between Text and Dotenv,
+                // which matters for the files that will be read.
+                if (online) { contentOnlineOnly++; return; }
+                if (size > ProtectConstants.MaxContentBytes) { ContentTooLarge++; return; }
+                kind = ProtectNames.IsDotenvName(f.Name, buffer) ? ContentKind.Dotenv : ContentKind.Text;
+            }
+            else
+            {
+                kind = ProtectNames.ContentKindOf(f.Name, textClass, dir.Tool != ToolHome.None, buffer);
+                if (kind == 0) return;
+                if (online) { contentOnlineOnly++; return; }
+                if (size > ProtectConstants.MaxContentBytes) { ContentTooLarge++; return; }
+            }
+            PendingContent pc;
+            pc.Node = f;
+            pc.Kind = kind;
+            if (dir.Tool != ToolHome.None) pc.Place = Place.UsualPlace;  // tool-home keys are expected there
+            else
+            {
+                RepoQuery repo = RepoQuery.Known(dir.InRepo);
+                pc.Place = ProtectNames.PlaceOf(dir, ref repo, 0);
+            }
+            contentCandidates.Add(pc);
+        }
+
+        // Whether the folder Analyze is about to walk holds a .git entry (or is one of the context's repository roots),
+        // for DirState.InRepo. Analyze asks it once per folder the content scan can read, just before the folder's own
+        // loop over the same children.
+        public bool RepoHere(DirNode d)
+        {
+            return ProtectNames.HasGitChild(d) || (repoNodes.Count > 0 && repoNodes.Contains(d));
         }
 
         bool UnderMarkParent(DirNode dir)
@@ -1861,6 +2132,27 @@ namespace DiskSpace
                 findings.Add(new Finding(m.PatternId, m.Tier, scansNodes[i].FullPath, 0, 0, m.Place));
                 nodes.Add(scansNodes[i]);
             }
+
+            // A content candidate that also has a finding by name takes that finding's place (section 5.2).
+            var cands = new ContentCandidate[contentCandidates.Count];
+            Dictionary<Node, Place> byName = null;
+            if (foundNodes.Count > 0 && cands.Length > 0)
+            {
+                byName = new Dictionary<Node, Place>();
+                for (int i = 0; i < foundNodes.Count; i++)
+                    if (foundNodes[i] is FileNode && !byName.ContainsKey(foundNodes[i])) byName.Add(foundNodes[i], found[i].Place);
+            }
+            for (int i = 0; i < cands.Length; i++)
+            {
+                PendingContent c = contentCandidates[i];
+                Place p;
+                if (byName == null || !byName.TryGetValue(c.Node, out p)) p = c.Place;
+                cands[i] = new ContentCandidate(c.Node, c.Node.Size, p, c.Kind);
+            }
+            result.ContentCandidates = cands;
+            result.ContentTooLarge = ContentTooLarge;
+            result.ContentOnlineOnly = contentOnlineOnly;
+            result.ContentSkippedFolders = contentSkippedFolders;
         }
     }
 }

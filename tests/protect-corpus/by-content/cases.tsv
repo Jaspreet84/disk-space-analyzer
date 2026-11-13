@@ -1,2 +1,145 @@
 # file	expect	tier	line
-# Cases arrive with the content scan in stage 2. See ../README.md for the format.
+# Protect stage 2, findings by content. Format: ../README.md. No file here holds a key in a valid format:
+# each template under files/ holds recipes, and the tests build the real files in %TEMP% and delete them.
+# --- github-token
+home/.env	github-token	Confirmed	3:14
+proj/src/config.json	github-token	Confirmed	2:13
+home/.git-credentials	github-token	Confirmed	1:13
+proj/deploy.yml	github-token	Confirmed	1:7
+proj/run.js	github-token	Confirmed	1:12
+proj/bad1.txt	none	-	-
+proj/bad2.md	none	-	-
+proj/len.txt	none	-	-
+proj/glued.txt	none	-	-
+proj/under.txt	none	-	-
+proj/app.json	none	-	-
+proj/readme.md	none	-	-
+# --- github-fine-grained
+proj/ci.yaml	github-fine-grained	Likely	1:8
+proj/setup.ps1	github-fine-grained	Likely	1:7
+proj/fg1.txt	none	-	-
+proj/fg2.txt	none	-	-
+proj/fg3.txt	none	-	-
+# --- aws-access-key-id
+proj/settings.py	aws-access-key-id	Likely	1:11
+proj/creds.json	aws-access-key-id	Likely	1:8
+proj/deploy.sh	aws-access-key-id	Likely	1:1
+proj/app.ini	aws-access-key-id	Likely	1:19
+proj/docs1.md	none	-	-
+proj/docs2.md	none	-	-
+proj/iam.json	none	-	-
+proj/digit.txt	none	-	-
+proj/blob.txt	none	-	-
+proj/xx.txt	none	-	-
+# --- slack-token
+proj/bot.js	slack-token	Likely	1:9
+proj/user.txt	slack-token	Likely	1:1
+proj/app.yml	slack-token	Likely	1:12
+proj/s1.txt	none	-	-
+proj/s2.md	none	-	-
+proj/s3.txt	none	-	-
+# --- slack-webhook
+proj/notify.py	slack-webhook	Likely	1:8
+proj/hooks.toml	slack-webhook	Likely	1:8
+proj/h1.md	none	-	-
+proj/h2.txt	none	-	-
+proj/h3.txt	none	-	-
+# --- stripe-live-key
+proj/pay.rb	stripe-live-key	Likely	1:19
+proj/pay.go	stripe-live-key	Likely	1:7
+proj/pay.ts	stripe-live-key	Likely	1:12
+proj/st1.js	none	-	-
+proj/st2.js	none	-	-
+proj/st3.txt	none	-	-
+# --- google-api-key
+proj/maps.js	google-api-key	Likely	1:7
+proj/app.yaml	google-api-key	Likely	1:11
+# Every published sample key, one per line (the recipe google:samples expands to all of them).
+proj/g-samples.txt	none	-	-
+proj/g2.txt	none	-	-
+proj/g3.txt	none	-	-
+# A straight alphabet run after the usual first two body characters, as docs placeholders write it.
+proj/g4.txt	none	-	-
+proj/g5.txt	none	-	-
+# --- openai-key
+proj/ai.py	openai-key	Likely	1:19
+proj/ai2.py	openai-key	Likely	1:6
+proj/ai3.txt	openai-key	Likely	1:1
+proj/o1.txt	none	-	-
+proj/o2.txt	none	-	-
+proj/o3.txt	none	-	-
+# --- pem-private-key
+proj/certs/server.key	pem-private-key	Confirmed	1:1
+proj/certs/tls.pem	pem-private-key	Confirmed	2:1
+proj/keys/id_ed25519	pem-private-key	Confirmed	1:1
+proj/keys/ec.pem	pem-private-key	Confirmed	1:1
+proj/keys/secret.txt	pem-private-key	Confirmed	1:5
+proj/svc-account.json	pem-private-key	Confirmed	3:19
+proj/docs.md	none	-	-
+proj/Parser.cs	none	-	-
+proj/pub.pem	none	-	-
+proj/ca.pem	none	-	-
+proj/mm.pem	none	-	-
+proj/short.pem	none	-	-
+proj/noend.pem	none	-	-
+# --- pem-private-key-encrypted
+proj/enc.pem	pem-private-key-encrypted	Confirmed	1:1
+proj/procenc.key	pem-private-key-encrypted	Confirmed	1:1
+proj/enc-header.md	none	-	-
+proj/enc-short.pem	none	-	-
+# --- env-secret
+home/.env.local	env-secret	Likely	1:21
+home/.env.production	env-secret	Likely	1:19
+proj/.secrets.env	env-secret	Likely	2:15
+proj/.secrets.env	env-secret	Likely	3:11
+home/.env.staging	env-secret	Likely	1:16
+home/.env.example	none	-	-
+proj/config.yaml	none	-	-
+home/.env.neg1	none	-	-
+home/.env.neg2	none	-	-
+home/.env.neg3	none	-	-
+home/.env.neg4	none	-	-
+# A format row decides a format value in a .env file: a valid token is only github-token, bait gives nothing.
+home/.env.fmt	github-token	Confirmed	1:14
+home/.env.bait	none	-	-
+# --- shared
+proj/hashes.txt	none	-	-
+proj/blob.b64.txt	none	-	-
+proj/session.json	none	-	-
+#! nul 4000
+proj/bin.txt	none	-	-
+#! encoding utf16le
+proj/wide.txt	none	-	-
+#! pad 1048577
+proj/big.json	none	-	-
+proj/vendor.min.js	none	-	-
+proj/page.html	none	-	-
+proj/app.log	none	-	-
+#! crlf
+proj/crlf.txt	github-token	Confirmed	3:3
+#! cr
+proj/cr.txt	github-token	Confirmed	3:1
+#! encoding utf8bom
+proj/bom.txt	github-token	Confirmed	1:5
+proj/tab.txt	github-token	Confirmed	1:5
+# 25 tokens, one per line: the per-file cap of 20 keeps lines 1 to 20.
+proj/many.txt	github-token	Confirmed	1:4
+proj/many.txt	github-token	Confirmed	2:4
+proj/many.txt	github-token	Confirmed	3:4
+proj/many.txt	github-token	Confirmed	4:4
+proj/many.txt	github-token	Confirmed	5:4
+proj/many.txt	github-token	Confirmed	6:4
+proj/many.txt	github-token	Confirmed	7:4
+proj/many.txt	github-token	Confirmed	8:4
+proj/many.txt	github-token	Confirmed	9:4
+proj/many.txt	github-token	Confirmed	10:5
+proj/many.txt	github-token	Confirmed	11:5
+proj/many.txt	github-token	Confirmed	12:5
+proj/many.txt	github-token	Confirmed	13:5
+proj/many.txt	github-token	Confirmed	14:5
+proj/many.txt	github-token	Confirmed	15:5
+proj/many.txt	github-token	Confirmed	16:5
+proj/many.txt	github-token	Confirmed	17:5
+proj/many.txt	github-token	Confirmed	18:5
+proj/many.txt	github-token	Confirmed	19:5
+proj/many.txt	github-token	Confirmed	20:5

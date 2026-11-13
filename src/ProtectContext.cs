@@ -130,6 +130,22 @@ namespace DiskSpace
             return list.ToArray();
         }
 
+        // Whether a scan root is on another computer: a UNC path (\\server\share, or \\?\UNC\...) or a mapped
+        // network drive. The content scan reads no file there (ProtectConstants.NetworkDrivesNote). Metadata only.
+        public static bool IsNetworkPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            string p = path.Replace('/', '\\');
+            if (p.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) return true;
+            if (p.StartsWith(@"\\?\", StringComparison.Ordinal) || p.StartsWith(@"\\.\", StringComparison.Ordinal)) p = p.Substring(4);
+            else if (p.StartsWith(@"\\", StringComparison.Ordinal)) return true;
+            if (p.Length < 2 || p[1] != ':' || !char.IsLetter(p[0])) return false;
+            try { return new DriveInfo(p.Substring(0, 1)).DriveType == DriveType.Network; }
+            catch (ArgumentException) { return false; }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+        }
+
         static string[] RemovableRoots()
         {
             var roots = new List<string>();

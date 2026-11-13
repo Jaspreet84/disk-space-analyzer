@@ -15,6 +15,10 @@ namespace DiskSpace
         public const uint FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x40000;
         public const uint FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x400000;
 
+        // Reparse tags, read from WIN32_FIND_DATA.dwReserved0 when FILE_ATTRIBUTE_REPARSE_POINT is set.
+        public const uint IO_REPARSE_TAG_SYMLINK = 0xA000000C;
+        public const uint IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003;
+
         public const int FindExInfoBasic = 1;
         public const int FIND_FIRST_EX_LARGE_FETCH = 2;
         public const int ERROR_FILE_NOT_FOUND = 2;
@@ -87,6 +91,15 @@ namespace DiskSpace
 
         [DllImport("user32.dll")]
         public static extern bool DestroyIcon(IntPtr hIcon);
+
+        // The program registered for a file type, such as ".json". Used by ShellOps.OpenAt to pick an editor; the
+        // result is only a path to compare, nothing is run through the association.
+        public const uint ASSOCF_NONE = 0;
+        public const uint ASSOCSTR_EXECUTABLE = 2;
+
+        [DllImport("shlwapi.dll", CharSet = CharSet.Unicode, EntryPoint = "AssocQueryStringW")]
+        public static extern int AssocQueryString(uint flags, uint str, string pszAssoc, string pszExtra,
+            System.Text.StringBuilder pszOut, ref uint pcchOut);
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct SHELLEXECUTEINFO

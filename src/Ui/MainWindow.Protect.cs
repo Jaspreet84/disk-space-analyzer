@@ -10,17 +10,49 @@ using System.Windows.Threading;
 
 namespace DiskSpace
 {
-    // The Protect page: findings by name, grouped into cards, and whether the large personal folders have a copy
-    // on another drive. This file is under tools\check-trust.ps1: it changes nothing on disk except protect.json
-    // (through ProtectStore.Save), reads no file contents, and hands copies and checks to the Move page's flows.
+    // The Protect page: findings by name and, once the user turns it on, by reading small text files, grouped into
+    // cards; and whether the large personal folders have a copy on another drive. This file is under
+    // tools\check-trust.ps1: it changes nothing on disk except protect.json (through ProtectStore.Save), reads no
+    // file contents itself (the content scan runs in SecretScan and hands back places only), and hands copies and
+    // checks to the Move page's flows.
     sealed partial class MainWindow
     {
         StackPanel protectInfo, protectResults, protectCoverageBusy, protectHiddenLine, protectHiddenPanel;
-        Border protectNoScan;
+        StackPanel protectContentProgress, protectNotLooked;
+        Border protectNoScan, protectContentCard;
+        Grid protectContentTitleRow;
         TextBlock protectToReview, protectNote, protectKeys, protectDocs, protectNoCopy, protectEmpty, protectHiddenText;
         TextBlock protectCoverageHeadline, protectCoverageNote;
-        ItemsControl protectFindings, protectHiddenList, protectCoverageList;
-        Button protectShowHidden;
+        TextBlock protectSecrets, protectSecretsNote, protectContentLine, protectContentText;
+        ItemsControl protectFindings, protectHiddenList, protectCoverageList, protectNotLookedList;
+        Button protectShowHidden, protectContentCancel, protectContentAgain;
+        ToggleButton protectContentSwitch, protectNotLookedToggle;
+        ProgressBar protectContentBar;
+
+        // The content scan (stage 2). contentState is null (not run for this scan), "running", "done" or "stopped".
+        CancellationTokenSource contentCts;
+        Task contentTask;               // the snapshot waits on it
+        ContentRun contentRun;          // copies findings while a run is going, when the engine hands one out
+        ContentProgress contentProgress;
+        bool contentRunning;
+        DispatcherTimer contentTimer;
+        ContentPlan contentPlan;
+        ScanResult contentFor;          // the scan the current run reads
+        DirNode contentUnder;           // the folder of a partial run after an edit; null for a full run
+        string contentState;
+        long contentPlanFiles, contentDoneFiles;
+        int contentCopied, contentPairs, contentPairFiles;
+        readonly System.Diagnostics.Stopwatch contentRefreshClock = new System.Diagnostics.Stopwatch();
+        readonly List<KeyValuePair<double, double>> contentEstimates = new List<KeyValuePair<double, double>>();
+        readonly HashSet<string> showAllCards = new HashSet<string>(StringComparer.Ordinal);
+        string snapContent;             // --dialog protect-content-*
+        bool snapFrozen;                // the snapshot's fixed progress numbers
+        string contentPartialBase;      // the state before a chain of partial runs: "done", "stopped" or null
+        bool contentFindingsPending;    // findings copied since the cards were last drawn
+        const int CardsPerPage = 100;   // cards drawn at first; "Show more" adds this many again
+        int protectCardLimit = CardsPerPage;
+        string protectCardsShape;       // the drawn cards, to skip drawing the same list again during a run
+        Button protectMoreCards;
 
         ProtectStore protectStore;
         CoverageReport coverage;
@@ -33,21 +65,14 @@ namespace DiskSpace
         bool snapExpandFirst, snapExpandUsual;
         List<ProtectCardVm> protectCards = new List<ProtectCardVm>();
 
-        // One finding as the page works with it, with the node it was found on (null after a partial rescan).
-        sealed class ProtectEntry
-        {
-            public Finding F;
-            public Node N;
-            public string Path, Name, Base;
-            public long Size = -1, LastWrite;
-            public bool OnlineOnly, Mail;
-            public readonly List<ProtectEntry> Twins = new List<ProtectEntry>();  // same name and size on other drives
-        }
 
         void WireProtect()
         {
             ReadProtectArgs();
             protectStore = LoadProtectStore();
+            // A snapshot never reads real files: the stored choice is forced off (protect-content-run turns it on
+            // in memory, for a fixture tree).
+            if (options.Snapshot != null) protectStore.ContentScan = false;
             protectInfo = E<StackPanel>("ProtectInfo");
             protectResults = E<StackPanel>("ProtectResults");
             protectCoverageBusy = E<StackPanel>("ProtectCoverageBusy");
@@ -67,6 +92,35 @@ namespace DiskSpace
             protectHiddenList = E<ItemsControl>("ProtectHiddenList");
             protectCoverageList = E<ItemsControl>("ProtectCoverage");
             protectShowHidden = E<Button>("ProtectShowHidden");
+            protectSecrets = E<TextBlock>("ProtectSecrets");
+            protectSecretsNote = E<TextBlock>("ProtectSecretsNote");
+            protectContentSwitch = E<ToggleButton>("ProtectContentSwitch");
+            protectContentLine = E<TextBlock>("ProtectContentLine");
+            protectContentProgress = E<StackPanel>("ProtectContentProgress");
+            protectContentTitleRow = E<Grid>("ProtectContentTitleRow");
+            protectContentBar = E<ProgressBar>("ProtectContentBar");
+            protectContentText = E<TextBlock>("ProtectContentText");
+            protectContentCancel = E<Button>("ProtectContentCancel");
+            protectContentAgain = E<Button>("ProtectContentAgain");
+            protectNotLooked = E<StackPanel>("ProtectNotLooked");
+            protectNotLookedToggle = E<ToggleButton>("ProtectNotLookedToggle");
+            protectNotLookedList = E<ItemsControl>("ProtectNotLookedList");
+            protectContentCard = E<Border>("ProtectContentCard");
+            protectMoreCards = E<Button>("ProtectMoreCards");
+            protectMoreCards.Click += (s, e) =>
+            {
+                protectCardLimit += CardsPerPage;
+                RefreshProtect();
+            };
+
+            contentTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            contentTimer.Tick += (s, e) => OnContentTick();
+            // Checked and Unchecked, not Click: a screen reader's Toggle sets IsChecked without a click.
+            protectContentSwitch.Checked += OnContentSwitchToggled;
+            protectContentSwitch.Unchecked += OnContentSwitchToggled;
+            protectContentCancel.Click += (s, e) => StopContentScan();
+            protectContentAgain.Click += (s, e) => ReadContentAgain();
+            E<Button>("ProtectContentInfoLink").Click += (s, e) => ScrollProtectTo(protectInfo, 16);
 
             E<Button>("ProtectScanButton").Click += (s, e) => StartScan(SystemDriveRoot());
             protectShowHidden.Click += (s, e) =>
@@ -104,7 +158,7 @@ namespace DiskSpace
                 bool hasNext = i + 1 < args.Length;
                 if (a == "--protect-home" && hasNext) { protectHome = args[++i]; continue; }
                 if (hasNext && (a == "--snapshot" || a == "--page" || a == "--explore" || a == "--select" || a == "--dialog" ||
-                                a == "--highlight" || a == "--theme")) { i++; continue; }
+                                a == "--highlight" || a == "--theme" || a == "--width")) { i++; continue; }
                 if (!a.StartsWith("--", StringComparison.Ordinal)) scanPath = a;
             }
             if (protectHome != null) options.ScanPath = scanPath;
@@ -171,81 +225,77 @@ namespace DiskSpace
             }
         }
 
+
         // ---------------------------------------------------------------- Drawing
 
         void RefreshProtect()
         {
+            RefreshProtect(false);
+        }
+
+        // fromTick: a refresh while the content scan runs. It leaves the drawn cards alone when the first page of
+        // cards has not changed, since drawing many cards takes the UI thread a while.
+        void RefreshProtect(bool fromTick)
+        {
             if (protectFindings == null) return;
+            contentFindingsPending = false;
             bool scanned = result != null;
             protectNoScan.Visibility = scanned ? Visibility.Collapsed : Visibility.Visible;
             protectResults.Visibility = scanned ? Visibility.Visible : Visibility.Collapsed;
             if (!scanned)
             {
                 protectFindings.ItemsSource = null;
+                protectCardsShape = null;
+                protectMoreCards.Visibility = Visibility.Collapsed;
                 protectCoverageList.ItemsSource = null;
+                ShowContentCard();
                 return;
             }
 
-            ProtectContext ctx = result.Protect;
-            List<ProtectEntry> hidden;
-            List<ProtectEntry> visible = ProtectEntries(out hidden);
-
-            var usual = new List<ProtectEntry>();
-            var projects = new List<ProtectEntry>();
-            var docs = new List<ProtectEntry>();
-            var creds = new List<ProtectEntry>();
-            foreach (ProtectEntry e in visible)
+            var b = new ProtectCardBuilder
             {
-                string id = e.F.PatternId;
-                Place p = e.F.Place;
-                bool vault = id == "password-vault";
-                if (id == "dotenv" && p == Place.Repository) projects.Add(e);
-                else if (p == Place.UsualPlace || (vault && p != Place.Downloads && p != Place.Desktop && p != Place.Temp && p != Place.Repository))
-                    usual.Add(e);
-                else if (vault || ProtectWording.IsDocument(id)) docs.Add(e);
-                else creds.Add(e);
-            }
-
-            var review = new List<ProtectCardVm>();
-            foreach (ProtectEntry e in MergeTwins(creds, true)) review.Add(CredentialCard(e, ctx));
-            review.AddRange(DocumentCards(docs, ctx));
-            review.Sort((a, b) =>
-            {
-                int c = ProtectWording.PlaceRank(a.SortPlace).CompareTo(ProtectWording.PlaceRank(b.SortPlace));
-                if (c != 0) return c;
-                c = ((int)a.SortTier).CompareTo((int)b.SortTier);
-                return c != 0 ? c : b.SortBytes.CompareTo(a.SortBytes);
-            });
-            // --dialog protect-expand: the first card that has a list to open.
-            if (snapExpandFirst)
-                foreach (ProtectCardVm c in review)
-                    if (c.ItemsVisibility == Visibility.Visible) { c.Expanded = true; break; }
-
-            var summary = new ProtectSummaryVm { ToReview = review.Count };
-            foreach (ProtectCardVm c in review)
-            {
-                if (c.Group == "doc") summary.Documents++;
-                else summary.Keys++;
-                summary.Files += c.Findings.Count;
-            }
-            summary.Note = summary.ToReview == 0 ? "Nothing needs a look."
-                : "Found by file name and location in " + Fmt.Count(summary.Files) + (summary.Files == 1 ? " file" : " files") + ". Nothing was opened.";
+                R = result,
+                Store = protectStore,
+                ContentRan = protectStore.ContentScan,
+                IconOf = n => ShellIcons.For(n, false),
+                CoverageLineOf = CoverageLine,
+                CanOpenAt = ShellOps.CanOpenAt,
+                ExpandFirst = snapExpandFirst,
+                ExpandSecret = snapContent == "protect-content-run",
+                ExpandUsual = snapExpandUsual,
+                ShowAll = showAllCards
+            };
+            b.Build();
+            List<ProtectCardVm> review = b.Review;
+            ProtectSummaryVm summary = b.Summary;
+            int secretFiles;
+            contentPairs = b.SecretPairs(out secretFiles);
+            contentPairFiles = secretFiles;
+            summary.Note = SummaryNote(summary);
             summary.NoCopyText = NoCopyText();
 
-            var cards = new List<ProtectCardVm>(review);
-            if (usual.Count > 0) cards.Add(UsualCard(usual, ctx));
-            if (projects.Count > 0) cards.Add(ProjectsCard(projects));
             // A list the user opened stays open when the page is drawn again (after Hide, Trust, Undo, a theme
             // change or the backup check).
             var opened = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (ProtectCardVm c in protectCards) if (c.Expanded) opened.Add(CardKey(c));
-            foreach (ProtectCardVm c in cards)
+            // Only the first protectCardLimit cards are drawn; the counts above still cover all of them.
+            List<ProtectCardVm> shown = b.Cards.Count > protectCardLimit ? b.Cards.GetRange(0, protectCardLimit) : b.Cards;
+            foreach (ProtectCardVm c in shown)
             {
                 if (opened.Contains(CardKey(c))) c.Expanded = true;
                 if (c.ItemsVisibility != Visibility.Visible) c.Expanded = false;
             }
-            protectCards = cards;
-            protectFindings.ItemsSource = cards;
+            string shape = CardsShape(shown);
+            if (!fromTick || shape != protectCardsShape)
+            {
+                protectCards = shown;
+                protectFindings.ItemsSource = shown;
+                protectCardsShape = shape;
+            }
+            int notShown = b.Cards.Count - shown.Count;
+            protectMoreCards.Visibility = notShown > 0 ? Visibility.Visible : Visibility.Collapsed;
+            if (notShown > 0)
+                protectMoreCards.Content = "Show " + Fmt.Count(Math.Min(notShown, CardsPerPage)) + " more (" + Fmt.Count(notShown) + " not shown)";
 
             protectToReview.Text = Fmt.Count(summary.ToReview);
             protectNote.Text = summary.Note;
@@ -253,621 +303,627 @@ namespace DiskSpace
             protectDocs.Text = Fmt.Count(summary.Documents);
             protectNoCopy.Text = summary.NoCopyText;
             protectCoverageBusy.Visibility = coverageRunning ? Visibility.Visible : Visibility.Collapsed;
+            ShowSecretsFigure();
 
-            if (review.Count > 0) protectEmpty.Visibility = Visibility.Collapsed;
+            if (review.Count > 0)
+            {
+                protectEmpty.Visibility = Visibility.Collapsed;
+                protectNotLooked.Visibility = Visibility.Collapsed;
+            }
             else
             {
                 protectEmpty.Visibility = Visibility.Visible;
-                protectEmpty.Text = visible.Count == 0 && hidden.Count > 0
-                    ? "Nothing to show. " + Fmt.Count(hidden.Count) + (hidden.Count == 1 ? " finding is" : " findings are") + " hidden by you."
-                    : "Nothing to review. Protect checked the names of " + Fmt.Count(result.Root.FileCount) + " files.";
+                bool allHidden = b.Visible.Count + b.VisibleContent == 0 && b.Hidden.Count > 0;
+                protectEmpty.Text = allHidden
+                    ? "Nothing to show. " + Fmt.Count(b.Hidden.Count) + (b.Hidden.Count == 1 ? " finding is" : " findings are") + " hidden by you."
+                    : CleanText();
+                protectNotLooked.Visibility = allHidden ? Visibility.Collapsed : Visibility.Visible;
+                protectNotLookedList.ItemsSource = NotLookedFor();
             }
 
-            RefreshHidden(hidden);
+            RefreshHidden(b.Hidden);
             RefreshCoverageSection();
+            ShowContentCard();
+        }
+
+        // The drawn list in short: each card's key and how many findings and rows it has.
+        static string CardsShape(List<ProtectCardVm> cards)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (ProtectCardVm c in cards)
+            {
+                sb.Append(CardKey(c)).Append('|').Append(c.Findings == null ? 0 : c.Findings.Count);
+                sb.Append('|').Append(c.Items == null ? 0 : c.Items.Count).Append('|').Append(c.Expanded ? 1 : 0).Append('\n');
+            }
+            return sb.ToString();
         }
 
         // What identifies a card from one drawing to the next.
         static string CardKey(ProtectCardVm c)
         {
             if (c.Group == "usual" || c.Group == "projects") return c.Group;
+            if (c.Group == "secret") return "secret|" + Norm(c.ActionPath ?? c.Path ?? c.Title);
             return c.Group + "|" + (c.ActionPath ?? c.Path ?? c.Title);
         }
 
-        List<ProtectEntry> ProtectEntries(out List<ProtectEntry> hidden)
+        // "Found by name in 4 files; read 14,820 text files with 11 patterns."
+        string SummaryNote(ProtectSummaryVm summary)
         {
-            var visible = new List<ProtectEntry>();
-            hidden = new List<ProtectEntry>();
-            if (result == null || result.Findings == null) return visible;
-            for (int i = 0; i < result.Findings.Count; i++)
+            if (summary.ToReview == 0) return "Nothing needs a look.";
+            string name = "Found by name in " + Fmt.Count(summary.Files) + (summary.Files == 1 ? " file" : " files");
+            if (!protectStore.ContentScan) return name + ". The content scan is off.";
+            switch (contentState)
             {
-                Finding f = result.Findings[i];
-                if (f == null || f.Path == null) continue;
-                Node n = result.FindingNodes != null && i < result.FindingNodes.Count ? result.FindingNodes[i] : null;
-                if (n != null && !Attached(n)) n = null;
-                var e = new ProtectEntry { F = f, N = n, Path = f.Path, Name = LastSegment(f.Path) };
-                if (n != null)
-                {
-                    var file = n as FileNode;
-                    e.Size = n.Size;
-                    e.LastWrite = n.LastWrite;
-                    e.OnlineOnly = file != null && (file.Flags & FileFlags.OnlineOnly) != 0;
-                }
-                e.Base = SafeBaseName(e.Name);
-                e.Mail = SafeIsMail(f.Path);
-                if (protectStore.IsHidden(f)) hidden.Add(e);
-                else visible.Add(e);
+                case "running": return name + "; reading text files now.";
+                case "done": return name + "; read " + Fmt.Count(contentPlanFiles) + " text files with " + PatternCount() + " patterns.";
+                case "stopped":
+                    return name + "; read " + Fmt.Count(contentDoneFiles) + " of " + Fmt.Count(contentPlanFiles) + " text files with " +
+                           PatternCount() + " patterns.";
+                default: return name + ". Text files are read after each scan.";
             }
-            return visible;
         }
 
-        static string SafeBaseName(string name)
+        static int PatternCount()
         {
-            try { return ProtectNames.BaseName(name) ?? name; }
-            catch (Exception) { return name; }
+            ContentRuleInfo[] rules = ProtectConstants.ContentRules;
+            return rules == null ? 0 : rules.Length;
         }
 
-        static bool SafeIsMail(string path)
+        // The clean state: "Nothing to review. Protect checked the names of 418,380 files and found no keys in ..."
+        string CleanText()
         {
-            try { return ProtectNames.IsMailAttachment(path); }
-            catch (Exception) { return false; }
+            int names = (int)Math.Min(int.MaxValue, result.Root.FileCount);
+            bool on = protectStore.ContentScan;
+            bool ran = on && (contentState == "done" || contentState == "stopped");
+            bool stopped = on && contentState == "stopped";
+            try { return ProtectInfo.ContentSummary(names, contentDoneFiles, contentPlanFiles, PatternCount(), on, ran, stopped); }
+            catch (Exception) { return "Nothing to review. Protect checked the names of " + Fmt.Count(result.Root.FileCount) + " files."; }
         }
 
-        // Findings with the same base name and size on different drives become one card or row.
-        static List<ProtectEntry> MergeTwins(List<ProtectEntry> list, bool samePattern)
+        string[] NotLookedFor()
         {
-            // Primaries are indexed by size, name and (when asked) pattern, so each entry looks only at its own
-            // bucket: thousands of same-size names (online-only files are all size 0) stay linear.
-            var primary = new List<ProtectEntry>();
-            var buckets = new Dictionary<string, List<ProtectEntry>>(StringComparer.OrdinalIgnoreCase);
-            foreach (ProtectEntry e in list)
+            int tooLarge = result == null ? 0 : result.ContentTooLarge;
+            int online = result == null ? 0 : result.ContentOnlineOnly;
+            try { return ProtectInfo.NotLookedFor(tooLarge, online) ?? new string[0]; }
+            catch (Exception) { return new string[0]; }
+        }
+
+        // The fourth figure of the summary strip. It follows the running job on every timer tick.
+        void ShowSecretsFigure()
+        {
+            if (protectSecrets == null) return;
+            string text, note = "";
+            if (!protectStore.ContentScan) text = "Off";
+            else if (contentState == "running")
             {
-                e.Twins.Clear();
-                ProtectEntry home = null;
-                List<ProtectEntry> bucket = null;
-                if (e.Size >= 0)
-                {
-                    string key = e.Size.ToString(System.Globalization.CultureInfo.InvariantCulture) + "|" +
-                                 (samePattern ? e.F.PatternId : "") + "|" + (e.Base ?? "");
-                    if (!buckets.TryGetValue(key, out bucket))
-                    {
-                        bucket = new List<ProtectEntry>();
-                        buckets.Add(key, bucket);
-                    }
-                    foreach (ProtectEntry p in bucket)
-                    {
-                        bool otherDrive = !SameDrive(p.Path, e.Path);
-                        foreach (ProtectEntry t in p.Twins) otherDrive = otherDrive && !SameDrive(t.Path, e.Path);
-                        if (!otherDrive) continue;
-                        home = p;
-                        break;
-                    }
-                }
-                if (home != null) home.Twins.Add(e);
-                else
-                {
-                    primary.Add(e);
-                    if (bucket != null) bucket.Add(e);
-                }
+                // The same count as after the run (section 5.4), as of the last drawing of the cards.
+                long found = contentPairs;
+                text = found == 0 ? "…" : Fmt.Count(found) + " …";
             }
-            return primary;
-        }
-
-        static bool SameDrive(string a, string b)
-        {
-            return string.Equals(DriveLetter(a), DriveLetter(b), StringComparison.OrdinalIgnoreCase);
-        }
-
-        static string DriveLetter(string path)
-        {
-            if (path == null) return "";
-            if (path.StartsWith("\\\\", StringComparison.Ordinal))
+            else if (contentState == "stopped")
             {
-                int cut = path.IndexOf('\\', 2);
-                cut = cut < 0 ? -1 : path.IndexOf('\\', cut + 1);
-                return cut < 0 ? path : path.Substring(0, cut);
+                // "3 (partial)": the count in the figure and the word under it, so it fits the 120 px column.
+                text = Fmt.Count(contentPairs);
+                note = "(partial)";
             }
-            return path.Length >= 2 && path[1] == ':' ? path.Substring(0, 2) : "";
-        }
-
-        // ---- Credential cards: one per file
-
-        ProtectCardVm CredentialCard(ProtectEntry e, ProtectContext ctx)
-        {
-            Finding f = e.F;
-            var all = new List<ProtectEntry> { e };
-            all.AddRange(e.Twins);
-            string kind = f.Kind;
-            var card = new ProtectCardVm
+            else if (contentState == "done")
             {
-                Group = "cred",
-                Glyph = ProtectWording.Glyph(f.PatternId),
-                Title = ProtectWording.CredentialTitle(f.PatternId, kind, f.Place, f.Path, e.Mail),
-                Reason = ProtectWording.CredentialReason(f.PatternId, kind, e.Name, f.Place, f.Path, e.Mail),
-                Lines = new List<string>(),
-                Chips = new List<ProtectChipVm>(),
-                Path = f.Path,
-                ActionPath = f.Path,
-                Node = e.N,
-                Findings = new List<Finding>(),
-                SortPlace = f.Place,
-                SortTier = f.Tier,
-                SortBytes = Math.Max(0, e.Size)
-            };
-            foreach (ProtectEntry t in e.Twins) card.Lines.Add("Also at " + t.Path);
-            foreach (ProtectEntry x in all)
-            {
-                card.Findings.Add(x.F);
-                if ((int)x.F.Tier < (int)card.SortTier) card.SortTier = x.F.Tier;
+                text = Fmt.Count(contentPairs);
+                note = "in " + Fmt.Count(contentPairFiles) + (contentPairFiles == 1 ? " file" : " files");
             }
-            card.Chips.Add(new ProtectChipVm(ProtectWording.TierText(card.SortTier), ProtectWording.TierVariant(f, e.Base)));
-            card.Chips.Add(new ProtectChipVm(ProtectWording.PlaceChip(f.Place, f.Path, e.Mail), null));
-            if (f.PatternId == "password-vault") card.Chips.Add(new ProtectChipVm("Encrypted", null));
-            AddSizeChips(card.Chips, e);
-            card.TrustFolder = f.Place == Place.Repository ? RepoRoot(e) : ParentOf(f.Path);
-            SetPrimary(card, ProtectWording.CanOpen(f.PatternId));
-            SetItems(card, all.Count > 1 ? Rows(all) : new List<ProtectItemVm>());
-            return card;
+            else text = "–";
+            protectSecrets.Text = text;
+            protectSecretsNote.Text = note;
+            protectSecretsNote.Visibility = note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        void AddSizeChips(List<ProtectChipVm> chips, ProtectEntry e)
+        // ---------------------------------------------------------------- The content scan
+
+        // The page's own test for "the content scan may run": consent exists only when the user turned it on.
+        internal bool ContentGate()
         {
-            if (e.N == null) return;
-            if (e.OnlineOnly) chips.Add(new ProtectChipVm("Online-only", null));
-            else chips.Add(new ProtectChipVm(Fmt.Size(e.Size), null));
-            string date = Fmt.Date(e.LastWrite);
-            if (date.Length > 0) chips.Add(new ProtectChipVm("Modified " + date, null));
+            return ContentConsent.FromStore(protectStore) != null;
         }
 
-        static void SetPrimary(ProtectCardVm card, bool open)
+        // The switch, the status line under its title, and the progress strip.
+        void ShowContentCard()
         {
-            card.PrimaryText = open ? "Open" : "Show in Explorer";
-            card.PrimaryTag = open ? "protect-open" : "protect-show";
-            card.ShowLinkVisibility = open ? Visibility.Visible : Visibility.Collapsed;
-            card.ActionsVisibility = Visibility.Visible;
+            if (protectContentSwitch == null) return;
+            bool on = protectStore.ContentScan;
+            SetContentSwitch(on);
+            string line;
+            if (!on) line = "Off. Protect has only checked file names and places.";
+            else if (contentState == "running") line = "On. Reading text files now.";
+            else if (contentState == "done")
+                line = "On. Read " + Fmt.Count(contentPlanFiles) + " text files in this scan for " + PatternCount() + " kinds of key.";
+            else if (contentState == "stopped")
+                line = "On. Stopped after " + Fmt.Count(contentDoneFiles) + " of " + Fmt.Count(contentPlanFiles) + " text files.";
+            else line = "On. Text files are read after each scan.";
+            protectContentLine.Text = line;
+            ShowContentProgress();
         }
 
-        static void SetItems(ProtectCardVm card, List<ProtectItemVm> items)
+        void ShowContentProgress()
         {
-            card.Items = items;
-            card.ItemsLabel = "Show " + Fmt.Count(items.Count) + (items.Count == 1 ? " file" : " files");
-            card.ItemsVisibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            card.LinesVisibility = card.Lines != null && card.Lines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            card.ChipsVisibility = card.Chips != null && card.Chips.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-            card.PathVisibility = string.IsNullOrEmpty(card.Path) ? Visibility.Collapsed : Visibility.Visible;
-        }
+            if (protectContentProgress == null) return;
+            bool running = contentState == "running" && protectStore.ContentScan;
+            bool stopped = contentState == "stopped" && protectStore.ContentScan;
+            protectContentProgress.Visibility = running || stopped ? Visibility.Visible : Visibility.Collapsed;
+            protectContentTitleRow.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+            protectContentAgain.Visibility = stopped ? Visibility.Visible : Visibility.Collapsed;
+            protectContentCancel.IsEnabled = running && (snapFrozen || (contentCts != null && !contentCts.IsCancellationRequested));
+            if (!running && !stopped) return;
 
-        List<ProtectItemVm> Rows(List<ProtectEntry> entries)
-        {
-            var rows = new List<ProtectItemVm>();
-            foreach (ProtectEntry e in entries)
+            long done, total, bytesRead, processed, totalBytes;
+            TimeSpan elapsed;
+            ContentProgress p = contentProgress;
+            if (snapFrozen)
             {
-                string kind = e.F.Kind;
-                if (e.Twins.Count > 0)
-                {
-                    var also = new List<string>();
-                    foreach (ProtectEntry t in e.Twins) also.Add(t.Path);
-                    kind += "  ·  also at " + string.Join(", ", also.ToArray());
-                }
-                rows.Add(new ProtectItemVm
-                {
-                    Node = e.N,
-                    Path = e.Path,
-                    Icon = e.N == null ? null : ShellIcons.For(e.N, false),
-                    Name = e.Name,
-                    Kind = kind,
-                    Folder = ParentOf(e.Path),
-                    SizeText = SizeText(e),
-                    OpenVisibility = ProtectWording.CanOpen(e.F.PatternId) ? Visibility.Visible : Visibility.Collapsed,
-                    TrustVisibility = Visibility.Collapsed
-                });
+                // --dialog protect-content-progress and protect-content-stopped: the numbers of section 7.3.
+                done = SnapDone;
+                total = SnapTotal;
+                bytesRead = SnapRead;
+                processed = SnapRead;
+                totalBytes = SnapTotalBytes;
+                elapsed = TimeSpan.FromSeconds(10);
             }
-            return rows;
-        }
-
-        static string SizeText(ProtectEntry e)
-        {
-            if (e.N == null) return "";
-            return e.OnlineOnly ? "online-only" : Fmt.Size(e.Size);
-        }
-
-        // ---- Document and vault cards: one per (top folder, family)
-
-        List<ProtectCardVm> DocumentCards(List<ProtectEntry> docs, ProtectContext ctx)
-        {
-            var cards = new List<ProtectCardVm>();
-            var order = new List<string>();
-            var groups = new Dictionary<string, List<ProtectEntry>>(StringComparer.Ordinal);
-            var folders = new Dictionary<string, ProtectEntry>(StringComparer.Ordinal);   // Scanned Documents folder findings
-
-            foreach (ProtectEntry e in docs)
+            else if (p != null)
             {
-                if (e.F.PatternId != "doc-scans-folder") continue;
-                string key = "scans|" + Norm(e.Path);
-                folders[key] = e;
-                order.Add(key);
-                groups[key] = new List<ProtectEntry>();
+                done = Interlocked.Read(ref p.DoneFiles);
+                total = Interlocked.Read(ref p.TotalFiles);
+                bytesRead = Interlocked.Read(ref p.BytesRead);
+                processed = Interlocked.Read(ref p.ProcessedBytes);
+                totalBytes = Interlocked.Read(ref p.TotalBytes);
+                elapsed = p.Clock.Elapsed;
             }
-            foreach (ProtectEntry e in docs)
-            {
-                if (e.F.PatternId == "doc-scans-folder") continue;
-                string key = null;
-                string np = Norm(e.Path);
-                foreach (KeyValuePair<string, ProtectEntry> sf in folders)
-                {
-                    if (!np.StartsWith(Norm(sf.Value.Path) + "\\", StringComparison.Ordinal)) continue;
-                    key = sf.Key;
-                    break;
-                }
-                if (key == null)
-                    key = e.Mail ? "mail" : Norm(TopFolder(e.Path, ctx)) + "|" + ProtectWording.Family(e.F.PatternId);
-                List<ProtectEntry> list;
-                if (!groups.TryGetValue(key, out list))
-                {
-                    list = new List<ProtectEntry>();
-                    groups[key] = list;
-                    order.Add(key);
-                }
-                list.Add(e);
-            }
-
-            foreach (string key in order)
-            {
-                ProtectEntry folder;
-                folders.TryGetValue(key, out folder);
-                cards.Add(DocumentCard(key, groups[key], folder, ctx));
-            }
-            return cards;
-        }
-
-        ProtectCardVm DocumentCard(string key, List<ProtectEntry> files, ProtectEntry scans, ProtectContext ctx)
-        {
-            List<ProtectEntry> rowsOf = MergeTwins(files, false);
-            var all = new List<ProtectEntry>();
-            if (scans != null) all.Add(scans);
-            all.AddRange(files);
-            ProtectEntry first = all[0];
-            bool mail = key == "mail";
-            bool vault = first.F.PatternId == "password-vault";
-
-            string folderPath = scans != null ? scans.Path : mail ? CommonFolder(all) : TopFolder(first.Path, ctx);
-            var families = new List<string>();
-            Place place = first.F.Place;
-            FindingTier tier = first.F.Tier;
-            long bytes = 0, newest = 0;
-            var findings = new List<Finding>();
-            foreach (ProtectEntry e in all)
-            {
-                findings.Add(e.F);
-                string fam = ProtectWording.Family(e.F.PatternId);
-                if (fam != "scans" && !families.Contains(fam)) families.Add(fam);
-                if (ProtectWording.PlaceRank(e.F.Place) < ProtectWording.PlaceRank(place)) place = e.F.Place;
-                if ((int)e.F.Tier < (int)tier) tier = e.F.Tier;
-                if (e != scans) bytes += Math.Max(0, e.Size);
-                if (e.LastWrite > newest) newest = e.LastWrite;
-            }
-            if (scans != null && scans.N != null) bytes = Math.Max(bytes, scans.N.Size);
-
-            string display = mail ? "Mail app attachments" : DisplayFolder(folderPath, ctx);
-            string title;
-            if (scans != null) title = "Scanned Documents folder in " + DisplayFolder(ParentOf(scans.Path), ctx);
-            else if (vault && rowsOf.Count == 1) title = "Password vault " + ProtectWording.PlacePhrase(place, first.Path, false);
-            else title = ProtectWording.FamilyCount(families, rowsOf.Count) + " in " + display;
-
-            string reason;
-            if (vault)
-            {
-                string ext = System.IO.Path.GetExtension(first.Name) ?? "";
-                bool keePass = ext.Equals(".kdbx", StringComparison.OrdinalIgnoreCase) || ext.Equals(".kdb", StringComparison.OrdinalIgnoreCase);
-                reason = ProtectWording.VaultReason(place, first.Path, keePass);
-            }
-            else reason = ProtectWording.DocumentReason(place, mail);
-
-            var card = new ProtectCardVm
-            {
-                Group = vault ? "vault" : "doc",
-                Glyph = vault ? ProtectWording.GlyphVault : ProtectWording.GlyphDocument,
-                Title = title,
-                Reason = reason,
-                Lines = new List<string>(),
-                Chips = new List<ProtectChipVm>(),
-                Path = all.Count == 1 && !mail ? first.Path : folderPath,
-                ActionPath = rowsOf.Count == 1 && scans == null ? rowsOf[0].Path : folderPath,
-                Node = rowsOf.Count == 1 && scans == null ? rowsOf[0].N : FolderNode(folderPath),
-                Findings = findings,
-                TrustFolder = place == Place.Repository ? RepoRoot(first) : mail ? AttachmentsFolder(first.Path) : folderPath,
-                SortPlace = place,
-                SortTier = tier,
-                SortBytes = bytes
-            };
-            if (scans != null && files.Count > 0)
-                card.Lines.Add("It also holds " + ProtectWording.FamilyCount(families, rowsOf.Count) + " matched by name.");
-            string copyLine = CoverageLine(folderPath);
-            if (copyLine != null) card.Lines.Add(copyLine);
-
-            card.Chips.Add(new ProtectChipVm(ProtectWording.TierText(tier), ProtectWording.TierVariant(first.F, first.Base)));
-            card.Chips.Add(new ProtectChipVm(ProtectWording.PlaceChip(place, first.Path, mail), null));
-            if (vault) card.Chips.Add(new ProtectChipVm("Encrypted", null));
-            if (all.Count == 1) AddSizeChips(card.Chips, first);
             else
             {
-                if (bytes > 0) card.Chips.Add(new ProtectChipVm(Fmt.Size(bytes), null));
-                string date = Fmt.Date(newest);
-                if (date.Length > 0) card.Chips.Add(new ProtectChipVm("Newest " + date, null));
+                done = contentDoneFiles;
+                total = contentPlanFiles;
+                bytesRead = processed = totalBytes = 0;
+                elapsed = TimeSpan.Zero;
             }
-            SetPrimary(card, true);
-            List<ProtectItemVm> rows = Rows(rowsOf);
-            SetItems(card, rows.Count > 1 || scans != null ? rows : new List<ProtectItemVm>());
-            if (rows.Count > 0) card.ItemsLabel = "Show " + Fmt.Count(rows.Count) + (rows.Count == 1 ? " file" : " files");
-            return card;
-        }
+            if (total <= 0 && contentPlan != null) total = contentPlan.Files.Length;
+            if (totalBytes <= 0 && contentPlan != null) totalBytes = contentPlan.TotalBytes;
 
-        // The card line that links a document folder to its backup check.
-        string CoverageLine(string folderPath)
-        {
-            FolderCoverage fc = CoverageOf(folderPath);
-            if (fc == null) return null;
-            switch (fc.State)
+            // Both halves count: on this PC each open costs more than the bytes read.
+            double f = 0;
+            if (total > 0) f += 0.5 * Math.Min(1.0, (double)done / total);
+            else f += 0.5;
+            if (totalBytes > 0) f += 0.5 * Math.Min(1.0, (double)processed / totalBytes);
+            else f += 0.5 * (total > 0 ? Math.Min(1.0, (double)done / total) : 1.0);
+            protectContentBar.Value = Math.Max(0, Math.Min(1000, f * 1000));
+
+            if (stopped)
             {
-                case CoverageState.TwoDrives:
-                    return "Second copy: on " + CopyDriveText(fc) + ", same files and sizes.";
-                case CoverageState.CopyDiffers:
-                    return "A copy on " + CopyDriveText(fc) + " differs from this folder.";
-                case CoverageState.OneCopy:
-                    return "No current copy on the drives connected now.";
-                default:
-                    return null;
+                protectContentText.Text = "Stopped after " + Fmt.Count(done) + " of " + Fmt.Count(total) + " files. Findings so far are shown.";
+                return;
             }
-        }
-
-        FolderCoverage CoverageOf(string folderPath)
-        {
-            if (coverage == null || coverage.Folders == null || folderPath == null) return null;
-            string n = Norm(folderPath);
-            foreach (FolderCoverage fc in coverage.Folders)
-                if (fc.Source != null && fc.Source.Path != null && Norm(fc.Source.Path) == n) return fc;
-            return null;
-        }
-
-        static string CopyDriveText(FolderCoverage fc)
-        {
-            CoverageDrive d = fc.Best == null ? null : fc.Best.Drive;
-            string letter = d != null && d.Root != null ? d.Root.TrimEnd('\\') : fc.Best != null ? DriveLetter(fc.Best.Path) : "another drive";
-            return letter + (d == null ? "" : d.External ? " (External)" : " (Internal)");
-        }
-
-        // ---- The two collapsed cards
-
-        ProtectCardVm UsualCard(List<ProtectEntry> usual, ProtectContext ctx)
-        {
-            var order = new List<string>();
-            var groups = new Dictionary<string, List<ProtectEntry>>(StringComparer.OrdinalIgnoreCase);
-            foreach (ProtectEntry e in usual)
+            var parts = new List<string>();
+            parts.Add(Fmt.Count(done) + " of " + Fmt.Count(total) + " files");
+            parts.Add(Fmt.Size(bytesRead) + " read");
+            if (snapFrozen)
             {
-                string label = UsualLabel(e, ctx);
-                List<ProtectEntry> list;
-                if (!groups.TryGetValue(label, out list))
+                parts.Add(Fmt.Size(SnapRate) + "/s");
+                parts.Add("about " + LeftText(TimeSpan.FromSeconds(40)) + " left");
+            }
+            else if (elapsed.TotalSeconds >= 5)
+            {
+                double rate = bytesRead / Math.Max(0.001, elapsed.TotalSeconds);
+                parts.Add(Fmt.Size((long)rate) + "/s");
+                TimeSpan left = TimeLeft(elapsed, f);
+                if (left > TimeSpan.Zero) parts.Add("about " + LeftText(left) + " left");
+            }
+            protectContentText.Text = string.Join(" · ", parts.ToArray());
+        }
+
+        const long SnapDone = 4100, SnapTotal = 14820, SnapRead = 52L << 20, SnapTotalBytes = 176L << 20, SnapRate = 21L << 20;
+
+        // Time left in whole seconds ("about 40 s left"); a minute or more uses Fmt.Duration.
+        static string LeftText(TimeSpan t)
+        {
+            if (t.TotalSeconds < 59.5) return Math.Max(1, (int)Math.Round(t.TotalSeconds)) + " s";
+            return Fmt.Duration(t);
+        }
+
+        // elapsed × (1 − f) / f, averaged over the estimates of the last 10 s so it does not jump.
+        TimeSpan TimeLeft(TimeSpan elapsed, double f)
+        {
+            if (f <= 0.001 || f >= 1) return TimeSpan.Zero;
+            double estimate = elapsed.TotalSeconds * (1 - f) / f;
+            double now = elapsed.TotalSeconds;
+            contentEstimates.Add(new KeyValuePair<double, double>(now, estimate));
+            while (contentEstimates.Count > 0 && contentEstimates[0].Key < now - 10) contentEstimates.RemoveAt(0);
+            double sum = 0;
+            foreach (KeyValuePair<double, double> e in contentEstimates) sum += e.Value;
+            return TimeSpan.FromSeconds(Math.Max(0, sum / contentEstimates.Count));
+        }
+
+        void OnContentTick()
+        {
+            if (contentState != "running") return;
+            ContentRun run = contentRun;
+            ScanResult r = result;
+            if (run != null && r == contentFor && !snapFrozen)
+            {
+                // New findings are copied under the run's lock. A file recycled or rescanned meanwhile is dropped.
+                // They wait for the next refresh, at most every 2 s, even when nothing new arrives after them.
+                int before = contentCopied;
+                contentCopied = CopyContentFindings(run, contentCopied, r, null);
+                if (contentCopied != before) contentFindingsPending = true;
+                if (contentFindingsPending && contentRefreshClock.Elapsed >= TimeSpan.FromSeconds(2))
                 {
-                    list = new List<ProtectEntry>();
-                    groups[label] = list;
-                    order.Add(label);
-                }
-                list.Add(e);
-            }
-            var rows = new List<ProtectItemVm>();
-            var findings = new List<Finding>();
-            foreach (string label in order)
-            {
-                List<ProtectEntry> list = groups[label];
-                foreach (ProtectEntry e in list) findings.Add(e.F);
-                rows.Add(UsualRow(label, list, ctx));
-            }
-            var card = new ProtectCardVm
-            {
-                Group = "usual",
-                Glyph = ProtectWording.GlyphVault,
-                Title = "In their usual places (" + Fmt.Count(usual.Count) + ")",
-                Reason = ProtectWording.UsualHeader,
-                Lines = new List<string>(),
-                Chips = new List<ProtectChipVm>(),
-                Findings = findings,
-                Expanded = snapExpandUsual,
-                ActionsVisibility = Visibility.Collapsed,
-                ShowLinkVisibility = Visibility.Collapsed
-            };
-            SetItems(card, rows);
-            card.ItemsLabel = "Show " + Fmt.Count(usual.Count) + (usual.Count == 1 ? " file" : " files");
-            return card;
-        }
-
-        ProtectItemVm UsualRow(string label, List<ProtectEntry> list, ProtectContext ctx)
-        {
-            ProtectEntry first = list[0];
-            if (list.Count == 1)
-            {
-                return new ProtectItemVm
-                {
-                    Node = first.N,
-                    Path = first.Path,
-                    Icon = first.N == null ? null : ShellIcons.For(first.N, false),
-                    Name = string.Equals(label, first.Name, StringComparison.OrdinalIgnoreCase) ? first.Name : label + ": " + first.Name,
-                    Kind = UsualRowText(first, ctx),
-                    Folder = ParentOf(first.Path),
-                    SizeText = SizeText(first),
-                    OpenVisibility = ProtectWording.CanOpen(first.F.PatternId) ? Visibility.Visible : Visibility.Collapsed,
-                    TrustVisibility = Visibility.Collapsed
-                };
-            }
-            bool docs = true, keys = true, sameId = true;
-            long bytes = 0;
-            var names = new List<string>();
-            foreach (ProtectEntry e in list)
-            {
-                docs = docs && ProtectWording.IsDocument(e.F.PatternId);
-                keys = keys && ProtectWording.IsKey(e.F.PatternId);
-                sameId = sameId && e.F.PatternId == first.F.PatternId;
-                bytes += Math.Max(0, e.Size);
-                if (names.Count < 6) names.Add(e.Name);
-            }
-            int n = list.Count;
-            string what = docs ? n + " personal documents" : keys ? n + " keys" : n + " files";
-            // The row's text speaks for every file in it, so the OneDrive and synced lines are used only when they
-            // hold for all of them: otherwise an entry without them gives the text.
-            ProtectEntry plain = first;
-            foreach (ProtectEntry e in list)
-                if (UsualRowText(e, ctx) != UsualRowText(first, ctx)) { plain = PlainEntry(list, ctx); break; }
-            string kind = sameId || docs ? UsualRowText(plain, ctx)
-                : label == ".ssh" && keys ? "SSH keeps your keys here. This is normal."
-                : "Kept where their tools keep them. This is normal.";
-            string folder = CommonFolder(list);
-            Node node = FolderNode(folder);
-            return new ProtectItemVm
-            {
-                Node = node,
-                Path = folder,
-                Icon = node == null ? null : ShellIcons.For(node, false),
-                Name = label + ": " + what,
-                Kind = kind,
-                Folder = string.Join(", ", names.ToArray()) + (n > names.Count ? ", …" : ""),
-                SizeText = Fmt.Size(bytes),
-                OpenVisibility = Visibility.Collapsed,
-                TrustVisibility = Visibility.Collapsed
-            };
-        }
-
-        // An entry of the list whose row text is the tool's plain usual-place text, or the first one.
-        static ProtectEntry PlainEntry(List<ProtectEntry> list, ProtectContext ctx)
-        {
-            foreach (ProtectEntry e in list)
-                if (UsualRowText(e, ctx) == ProtectWording.UsualText(e.F.PatternId)) return e;
-            return list[0];
-        }
-
-        static string UsualRowText(ProtectEntry e, ProtectContext ctx)
-        {
-            string id = e.F.PatternId;
-            if (ProtectWording.IsDocument(id) && ctx != null && ctx.OneDriveHint != null && Under(Norm(e.Path), ctx.OneDriveHint))
-                return "Kept in Documents, in OneDrive's folder. OneDrive is not set up to sync this folder on this PC.";
-            if (id == "password-vault" && e.F.Place == Place.Synced)
-                return "Encrypted by design, so this is not exposed by itself. This folder syncs to the cloud.";
-            return ProtectWording.UsualText(id);
-        }
-
-        // The row label in the usual-place card: the tool home, the known folder, or the file's own name.
-        static string UsualLabel(ProtectEntry e, ProtectContext ctx)
-        {
-            string id = e.F.PatternId;
-            if (id == "password-vault") return "Password vaults";
-            string np = Norm(e.Path);
-            if (ctx != null)
-            {
-                if (ProtectWording.IsDocument(id))
-                {
-                    foreach (string d in ctx.Documents) if (Under(np, d)) return "Documents";
-                    foreach (string d in ctx.Pictures) if (Under(np, d)) return "Pictures";
-                }
-                string[] rel = RelativeSegments(e.Path, np, ctx.Roaming);
-                if (rel != null && rel.Length > 1) return ProtectWording.RoamingLabel(rel[0]);
-                rel = RelativeSegments(e.Path, np, ctx.Local);
-                if (rel != null && rel.Length > 1) return rel[0];
-                rel = RelativeSegments(e.Path, np, ctx.Home);
-                if (rel != null)
-                {
-                    if (rel.Length == 1) return rel[0];
-                    if (rel[0].StartsWith(".", StringComparison.Ordinal)) return ProtectWording.ToolLabel(rel[0], rel.Length > 2 ? rel[1] : null);
-                    return rel[0];
+                    contentRefreshClock.Restart();
+                    RefreshProtect(true);
+                    return;
                 }
             }
-            string parent = ParentOf(e.Path);
-            return parent == null ? e.Name : LastSegment(parent);
+            ShowContentProgress();
+            ShowSecretsFigure();
         }
 
-        // The segments of path below root (both compared normalized), in the path's own casing; null if not below.
-        static string[] RelativeSegments(string path, string normalized, string root)
+        bool contentSwitchSync;  // the page is setting the switch itself
+
+        void SetContentSwitch(bool on)
         {
-            if (root == null || !Under(normalized, root)) return null;
-            int start = root.EndsWith("\\", StringComparison.Ordinal) ? root.Length : root.Length + 1;
-            if (start >= path.Length) return null;
-            return path.Substring(start).Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            contentSwitchSync = true;
+            try { protectContentSwitch.IsChecked = on; }
+            finally { contentSwitchSync = false; }
         }
 
-        ProtectCardVm ProjectsCard(List<ProtectEntry> projects)
+        async void OnContentSwitchToggled(object sender, RoutedEventArgs e)
         {
-            var order = new List<string>();
-            var groups = new Dictionary<string, List<ProtectEntry>>(StringComparer.OrdinalIgnoreCase);
-            var findings = new List<Finding>();
-            foreach (ProtectEntry e in projects)
+            if (contentSwitchSync) return;
+            // The switch never runs ahead of consent: it shows the stored choice until the dialog says yes.
+            bool wanted = protectContentSwitch.IsChecked == true;
+            SetContentSwitch(protectStore.ContentScan);
+            if (wanted && !protectStore.ContentScan) await AskContentConsent();
+            else if (!wanted && protectStore.ContentScan) TurnContentOff();
+        }
+
+        async Task AskContentConsent()
+        {
+            ScanResult r = result;
+            if (r == null) return;
+            ContentPlan plan;
+            try { plan = SecretScan.Plan(r, protectStore, null); }
+            catch (Exception ex)
             {
-                findings.Add(e.F);
-                string root = RepoRoot(e);
-                List<ProtectEntry> list;
-                if (!groups.TryGetValue(root, out list))
-                {
-                    list = new List<ProtectEntry>();
-                    groups[root] = list;
-                    order.Add(root);
-                }
-                list.Add(e);
+                ShowError(ex.Message);
+                return;
             }
-            var rows = new List<ProtectItemVm>();
-            foreach (string root in order)
+            bool none = plan.Files.Length == 0;
+            if (!await ShowDialog("Read text files for keys?", ContentDialogBody(plan, r), none ? "Turn on" : "Turn on and read", "Cancel", false))
+                return;
+            protectStore.ContentScan = true;
+            SaveProtectStore();
+            if (result == null)
             {
-                List<ProtectEntry> list = groups[root];
-                var names = new List<string>();
-                foreach (ProtectEntry e in list) names.Add(e.Name);
-                Node node = FolderNode(root);
-                rows.Add(new ProtectItemVm
+                ShowContentCard();
+                return;
+            }
+            if (result != r)
+            {
+                try { plan = SecretScan.Plan(result, protectStore, null); }
+                catch (Exception) { plan = null; }
+            }
+            if (plan != null) StartContentScan(plan);
+            else RefreshProtect();
+        }
+
+        // The consent dialog: ProtectInfo.ContentDialog's paragraphs, with the folder list in a small box. A line
+        // ending with ":" introduces the list; the lines after it that are not sentences are the folders.
+        UIElement ContentDialogBody(ContentPlan plan, ScanResult r)
+        {
+            var body = new StackPanel();
+            string[] lines;
+            try { lines = ProtectInfo.ContentDialog(plan, r.Root.FullPath) ?? new string[0]; }
+            catch (Exception) { lines = new string[0]; }
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i] ?? "";
+                TextBlock para = Paragraph(line, 14);
+                para.Margin = new Thickness(0, i == 0 ? 0 : 10, 0, 0);
+                if (line == "Nothing read here is kept after the scan.")
                 {
-                    Node = node,
-                    Path = root,
-                    Icon = node == null ? null : ShellIcons.For(node, false),
-                    Name = RepoDisplay(root) + ": " + string.Join(", ", names.ToArray()),
-                    Kind = list.Count == 1 ? "1 environment file" : list.Count + " environment files",
-                    Folder = root,
-                    SizeText = "",
-                    OpenVisibility = Visibility.Collapsed,
-                    TrustVisibility = Visibility.Visible,
-                    TrustFolder = root
+                    para.Style = (Style)Res("BodyStrong");
+                    para.FontSize = 14;
+                    para.ClearValue(TextBlock.ForegroundProperty);
+                }
+                body.Children.Add(para);
+                if (!line.TrimEnd().EndsWith(":", StringComparison.Ordinal)) continue;
+                var folders = new List<string>();
+                while (i + 1 < lines.Length && lines[i + 1] != null && !IsSentence(lines[i + 1]))
+                {
+                    i++;
+                    foreach (string part in lines[i].Split('\n'))
+                        if (part.Trim().Length > 0) folders.Add(part.Trim());
+                }
+                if (folders.Count == 0) continue;
+                body.Children.Add(new TextBox
+                {
+                    Text = string.Join("\n", folders.ToArray()),
+                    Style = (Style)Res("LogBox"),
+                    MaxHeight = 110,
+                    Margin = new Thickness(0, 8, 0, 0)
                 });
             }
-            var card = new ProtectCardVm
-            {
-                Group = "projects",
-                Glyph = ProtectWording.GlyphProject,
-                Title = "In your projects (" + Fmt.Count(projects.Count) + ")",
-                Reason = ProtectWording.ProjectsHeader,
-                Lines = new List<string>(),
-                Chips = new List<ProtectChipVm>(),
-                Findings = findings,
-                Expanded = false,
-                ActionsVisibility = Visibility.Collapsed,
-                ShowLinkVisibility = Visibility.Collapsed
-            };
-            SetItems(card, rows);
-            card.ItemsLabel = "Show " + Fmt.Count(projects.Count) + (projects.Count == 1 ? " file" : " files");
-            return card;
+            return body;
         }
 
-        static string RepoRoot(ProtectEntry e)
+        static bool IsSentence(string s)
         {
-            string root = null;
-            if (e.N != null)
+            string t = s.TrimEnd();
+            return t.EndsWith(".", StringComparison.Ordinal) && t.IndexOf('\n') < 0;
+        }
+
+        void TurnContentOff()
+        {
+            CancelContentScan();
+            if (result != null)
             {
-                try { root = ProtectNames.RepoRootOf(e.N); }
-                catch (Exception) { root = null; }
+                result.ContentFindings.Clear();
+                result.ContentNodes.Clear();
             }
-            return root ?? ParentOf(e.Path) ?? e.Path;
+            protectStore.ContentScan = false;
+            SaveProtectStore();
+            contentState = null;
+            contentPlan = null;
+            RefreshProtect();
+            Toast("Content scan off. Its findings were cleared.");
         }
 
-        // "warden\mvp": the last two folder names of a project root.
-        static string RepoDisplay(string root)
+        void StartContentScan(ContentPlan plan)
         {
-            string[] parts = root.TrimEnd('\\').Split('\\');
-            if (parts.Length >= 2 && !(parts.Length == 2 && parts[0].EndsWith(":", StringComparison.Ordinal)))
-                return parts[parts.Length - 2] + "\\" + parts[parts.Length - 1];
-            return root;
+            StartContentScan(plan, null, null);
         }
 
+        // Runs the content scan on its own threads. It does not set busy: Scan, Rescan, Recycle and Move stay
+        // available, and leaving the page does not stop it. under is the folder of a partial run after an edit,
+        // and partialBase the state the page had before that chain of partial runs ("done", "stopped" or null).
+        // A new run first waits for the one before it to finish its last files, so at most ContentWorkers files
+        // are read at a time and two runs never share the workers' buffer slots.
+        async void StartContentScan(ContentPlan plan, DirNode under, string partialBase)
+        {
+            // A full run the user stopped, still finishing its last files: what it found is kept (below).
+            ContentRun old = contentRun;
+            bool oldStopped = old != null && contentRunning && contentUnder == null && contentCts != null && contentCts.IsCancellationRequested;
+            ContentPlan oldPlan = contentPlan;
+            ContentProgress oldProgress = contentProgress;
+            ScanResult oldFor = contentFor;
+            int oldCopied = contentCopied;
+            Task drain = contentTask;
+            CancelContentScan();
+            ScanResult r = result;
+            ContentConsent consent = ContentConsent.FromStore(protectStore);
+            if (r == null || plan == null || consent == null) return;
+            var cts = contentCts = new CancellationTokenSource();
+            if (drain != null && !drain.IsCompleted)
+            {
+                try { await drain; }
+                catch (Exception) { }
+            }
+            if (oldStopped && under != null && result == oldFor && oldFor != null)
+            {
+                // The stopped run counts as stopped: its findings outside the edited folder stay, with its numbers.
+                CopyContentFindings(old, oldCopied, oldFor, Norm(under.FullPath));
+                if (oldPlan != null) contentPlanFiles = oldPlan.Files.Length;
+                if (oldProgress != null) contentDoneFiles = Interlocked.Read(ref oldProgress.DoneFiles);
+            }
+            // A newer run, a new scan or the switch turned off while waiting: this one does not start.
+            if (contentCts != cts || result != r || ContentConsent.FromStore(protectStore) == null) return;
+            CancellationToken token = cts.Token;
+            var p = new ContentProgress();
+            contentProgress = p;
+            contentPlan = plan;
+            contentFor = r;
+            contentRun = null;
+            contentCopied = 0;
+            contentUnder = under;
+            contentPartialBase = partialBase;
+            contentEstimates.Clear();
+            // A full run reads every file again, so its findings replace the earlier ones as they come in.
+            if (under == null)
+            {
+                r.ContentFindings.Clear();
+                r.ContentNodes.Clear();
+            }
+            ContentRun run;
+            try { run = SecretScan.Begin(consent, plan, p, token); }
+            catch (Exception ex)
+            {
+                contentCts = null;
+                ShowError(ex.Message);
+                return;
+            }
+            contentRun = run;
+            contentState = "running";
+            contentRunning = true;
+            contentRefreshClock.Restart();
+            contentTimer.Start();
+            RefreshProtect();
+
+            Task<ContentResult> job = Task.Run(() => run.Wait());
+            contentTask = job;
+            ContentResult res = null;
+            try { res = await job; }
+            catch (Exception) { res = null; }
+            // A newer run, a new scan, the switch turned off or the window closing: this run's result is not used.
+            if (contentCts != cts || result != r) return;
+            contentTimer.Stop();
+            contentRunning = false;
+            contentCts = null;
+            contentRun = null;
+
+            // The findings the timer has not copied yet. A file recycled or rescanned meanwhile is dropped.
+            bool cancelled = res == null || res.Cancelled || token.IsCancellationRequested;
+            contentCopied = CopyContentFindings(run, contentCopied, r, null);
+            long done = Interlocked.Read(ref p.DoneFiles);
+            if (under == null || cancelled)
+            {
+                contentPlanFiles = plan.Files.Length;
+                contentDoneFiles = cancelled ? done : plan.Files.Length;
+                contentState = cancelled ? "stopped" : "done";
+            }
+            else contentState = partialBase == "stopped" ? "stopped" : "done";
+
+            if (snapContent == "protect-content-progress" || snapContent == "protect-content-stopped")
+            {
+                // The snapshot shows a run in progress or stopped, with the fixed numbers of section 7.3.
+                snapFrozen = true;
+                contentPlanFiles = SnapTotal;
+                contentDoneFiles = SnapDone;
+                contentState = snapContent == "protect-content-progress" ? "running" : "stopped";
+            }
+            RefreshProtect();
+            if (contentState != "done" || under != null) return;
+            // The same count as the Secrets in text figure (section 5.4), so the toast and the strip agree.
+            if (contentPairs > 0)
+                Toast("Content scan done. " + Fmt.Count(contentPairs) + (contentPairs == 1 ? " key in " : " keys in ") +
+                      Fmt.Count(contentPairFiles) + (contentPairFiles == 1 ? " file." : " files."));
+            else
+                Toast("Content scan done. No keys found in " + Fmt.Count(plan.Files.Length) + " text files.");
+        }
+
+        // Copies a run's findings from index `from` into r, and returns the index to copy from next time. A file
+        // that left the tree is dropped, and so is one under skipUnder (a normalized folder about to be read again).
+        int CopyContentFindings(ContentRun run, int from, ScanResult r, string skipUnder)
+        {
+            if (run == null || r == null) return from;
+            var f = new List<Finding>();
+            var n = new List<Node>();
+            int next = run.CopyFindings(from, f, n);
+            for (int i = 0; i < f.Count && i < n.Count; i++)
+            {
+                if (!r.IsAttached(n[i])) continue;
+                if (skipUnder != null && f[i] != null && Under(Norm(f[i].Path), skipUnder)) continue;
+                r.ContentFindings.Add(f[i]);
+                r.ContentNodes.Add(n[i]);
+            }
+            return next;
+        }
+
+        // Stops the job for good: a new scan, the switch turned off, a newer run or the window closing. Its
+        // result is dropped. The Cancel button uses StopContentScan instead, which keeps the findings.
+        void CancelContentScan()
+        {
+            if (contentCts != null) contentCts.Cancel();
+            contentCts = null;
+            contentRun = null;
+            contentRunning = false;
+            if (contentTimer != null) contentTimer.Stop();
+            if (contentState == "running") contentState = null;
+        }
+
+        void StopContentScan()
+        {
+            if (contentCts != null) contentCts.Cancel();
+            protectContentCancel.IsEnabled = false;
+        }
+
+        // "Read all again": consent is stored, so there is no dialog.
+        void ReadContentAgain()
+        {
+            if (result == null || !protectStore.ContentScan) return;
+            ContentPlan plan;
+            try { plan = SecretScan.Plan(result, protectStore, null); }
+            catch (Exception ex)
+            {
+                ShowError(ex.Message);
+                return;
+            }
+            StartContentScan(plan);
+        }
+
+        // After a full scan: the content scan runs again by itself when it is on, since consent is remembered.
+        void ContentAfterScan()
+        {
+            contentState = null;
+            contentPlan = null;
+            contentPartialBase = null;
+            contentPlanFiles = contentDoneFiles = 0;
+            showAllCards.Clear();
+            protectCardLimit = CardsPerPage;
+            if (!protectStore.ContentScan || options.Snapshot != null || result == null) return;
+            ReadContentAgain();
+        }
+
+        // True while a full run is reading and the user has not pressed Cancel.
+        bool FullRunGoing()
+        {
+            return contentRunning && contentUnder == null && contentCts != null && !contentCts.IsCancellationRequested;
+        }
+
+        // After a partial rescan or a recycle: the findings under the edited folder are dropped and that folder
+        // alone is read again. A full run that was still going starts over, so nothing is missed. A partial run
+        // that is still going is replaced by one over the folder that holds both, so neither folder is missed,
+        // and the state from before the first edit is kept: a stopped scan stays stopped.
+        void ContentAfterEdit(DirNode edited)
+        {
+            if (result == null || !protectStore.ContentScan || options.Snapshot != null) return;
+            if (FullRunGoing() || edited == null || !Attached(edited))
+            {
+                ReadContentAgain();
+                return;
+            }
+            DirNode folder = edited;
+            string partialBase;
+            if (contentRunning && contentUnder != null)
+            {
+                partialBase = contentPartialBase;
+                folder = CommonFolder(contentUnder, edited);
+            }
+            else if (contentRunning) partialBase = "stopped";  // a full run the user stopped, still finishing
+            else partialBase = contentState;
+            ReadFolderAgain(folder, partialBase);
+        }
+
+        void ReadFolderAgain(DirNode folder, string partialBase)
+        {
+            string root = Norm(folder.FullPath);
+            for (int i = result.ContentFindings.Count - 1; i >= 0; i--)
+            {
+                Finding f = result.ContentFindings[i];
+                if (f != null && !Under(Norm(f.Path), root)) continue;
+                result.ContentFindings.RemoveAt(i);
+                if (i < result.ContentNodes.Count) result.ContentNodes.RemoveAt(i);
+            }
+            ContentPlan plan;
+            try { plan = SecretScan.Plan(result, protectStore, folder); }
+            catch (Exception) { return; }
+            StartContentScan(plan, folder, partialBase);
+        }
+
+        // The nearest folder of this scan that holds both a (which may have left the tree) and b.
+        DirNode CommonFolder(DirNode a, DirNode b)
+        {
+            string pa = Norm(a.FullPath);
+            for (DirNode d = b; d != null; d = d.Parent)
+                if (Under(pa, Norm(d.FullPath))) return d;
+            return result.Root;
+        }
+
+        // A folder trusted while a run is reading: the run starts again without it, so its files are not opened.
+        void ContentAfterTrust()
+        {
+            if (result == null || !protectStore.ContentScan || options.Snapshot != null) return;
+            if (!contentRunning || contentCts == null || contentCts.IsCancellationRequested) return;
+            if (contentUnder == null) ReadContentAgain();
+            else ContentAfterEdit(contentUnder.Detached || !Attached(contentUnder) ? null : contentUnder);
+        }
+
+        // A folder no longer trusted: its files were left out of the content scan, so that folder is read now.
+        void ContentAfterUntrust(string folder)
+        {
+            if (result == null || !protectStore.ContentScan || options.Snapshot != null || folder == null) return;
+            if (FullRunGoing()) { ReadContentAgain(); return; }
+            Node n = null;
+            try { n = result.FindNode(folder); }
+            catch (Exception) { n = null; }
+            var d = n as DirNode;
+            if (d == null || !Attached(d)) return;
+            ContentAfterEdit(d);
+        }
         // ---- Hidden by you
 
         void RefreshHidden(List<ProtectEntry> hidden)
@@ -877,7 +933,9 @@ namespace DiskSpace
             var rows = new List<ProtectHiddenVm>();
             foreach (ProtectEntry e in hidden)
             {
-                var row = new ProtectHiddenVm { Finding = e.F, Kind = e.F.Kind, Path = e.Path };
+                // A content finding is listed as "<Kind>, line N"; by-name findings have line 0.
+                string kind = e.F.Line > 0 ? e.F.Kind + ", line " + e.F.Line : e.F.Kind;
+                var row = new ProtectHiddenVm { Finding = e.F, Kind = kind, Path = e.Path };
                 if (protectStore.IsDismissed(e.F))
                 {
                     dismissed++;
@@ -919,15 +977,52 @@ namespace DiskSpace
                 string path = card.ActionPath ?? card.Path;
                 if (tag == "protect-show" && path != null) Try(() => ShellOps.ShowInExplorer(path));
                 else if (tag == "protect-open" && path != null) Try(() => ShellOps.Open(path));
+                else if (tag == "protect-open-line" && path != null) OpenAtLine(path, card.Line, card.Column);
+                else if (tag == "protect-copy" && path != null) CopyText(path);
                 else if (tag == "protect-dismiss") DismissCard(card);
                 else if (tag == "protect-trust") TrustCard(card);
+                else if (tag == "protect-show-all")
+                {
+                    showAllCards.Add(CardKey(card));
+                    RefreshProtect();
+                }
             }
             else if (item != null)
             {
                 if (tag == "item-show" && item.Path != null) Try(() => ShellOps.ShowInExplorer(item.Path));
                 else if (tag == "item-open" && item.Path != null) Try(() => ShellOps.Open(item.Path));
+                else if (tag == "item-open-line" && item.Path != null) OpenAtLine(item.Path, item.Line, item.Column);
+                else if (tag == "item-hide" && item.Finding != null) DismissPattern(item.Finding);
                 else if (tag == "item-trust" && item.TrustFolder != null) TrustWithDialog(item.TrustFolder);
             }
+        }
+
+        // Opens the file in a known text editor at the line. Never through the file's own association, which for
+        // a script would run it.
+        void OpenAtLine(string path, int line, int column)
+        {
+            bool opened = false;
+            try { opened = ShellOps.OpenAt(path, line, column); }
+            catch (Exception ex)
+            {
+                ShowError(ex.Message);
+                return;
+            }
+            if (!opened) Toast("No text editor was found to open this file at its line.", "");
+        }
+
+        // Hide on a match row: that kind of key in that file, on every line. The dismissal key has no line in it.
+        void DismissPattern(Finding f)
+        {
+            protectStore.Dismiss(f);
+            SaveProtectStore();
+            RefreshProtect();
+            Toast(ProtectWording.ContentPlural(f.PatternId) + " in " + LastSegment(f.Path) + " hidden.", "", "Undo", () =>
+            {
+                protectStore.Undismiss(f);
+                SaveProtectStore();
+                RefreshProtect();
+            });
         }
 
         // Right-click on a card or a row opens the usual menu. A finding whose node is gone (after a partial
@@ -939,17 +1034,38 @@ namespace DiskSpace
             Node n = null;
             string path = null;
             bool canOpen;
+            int line = 0, column = 0;
+            bool atLine = false;
             var item = element.DataContext as ProtectItemVm;
             var card = element.DataContext as ProtectCardVm;
             // Open (the file's own app) is offered only where the card or row offers it: documents and vaults.
-            // A key, certificate or sign-in file gets Show in Explorer, since its app can run or import it.
-            if (item != null) { n = item.Node; path = item.Path; canOpen = item.OpenVisibility == Visibility.Visible; }
-            else if (card != null) { n = card.Node; path = card.ActionPath ?? card.Path; canOpen = card.PrimaryTag == "protect-open"; }
+            // A key, certificate or sign-in file gets Show in Explorer, since its app can run or import it. A file
+            // with a key in its text gets Open at line, in a text editor, when one is found.
+            if (item != null)
+            {
+                n = item.Node;
+                path = item.Path;
+                canOpen = item.OpenVisibility == Visibility.Visible;
+                atLine = item.CanOpenAtLine;
+                line = item.Line;
+                column = item.Column;
+            }
+            else if (card != null)
+            {
+                n = card.Node;
+                path = card.ActionPath ?? card.Path;
+                canOpen = card.PrimaryTag == "protect-open";
+                atLine = card.CanOpenAtLine;
+                line = card.Line;
+                column = card.Column;
+            }
             else return;
             e.Handled = true;
             if (n != null && Attached(n))
             {
-                ShowMenu(n, protectFindings, canOpen || n is DirNode);
+                string at = path;
+                Action openAt = atLine && at != null ? new Action(() => OpenAtLine(at, line, column)) : null;
+                ShowMenu(n, protectFindings, canOpen || n is DirNode, openAt);
                 return;
             }
             if (path == null) return;
@@ -1002,11 +1118,13 @@ namespace DiskSpace
             protectStore.Trust(folder);
             SaveProtectStore();
             RefreshProtect();
+            ContentAfterTrust();
             Toast("Protect no longer lists anything in " + LastSegment(folder) + ". The files were not changed.", "\uE73E", "Undo", () =>
             {
                 protectStore.Untrust(folder);
                 SaveProtectStore();
                 RefreshProtect();
+                ContentAfterUntrust(folder);
             });
         }
 
@@ -1019,6 +1137,7 @@ namespace DiskSpace
             else if (vm.TrustedFolder != null) protectStore.Untrust(vm.TrustedFolder);
             SaveProtectStore();
             RefreshProtect();
+            if (vm.TrustedFolder != null) ContentAfterUntrust(vm.TrustedFolder);
         }
 
         // ---------------------------------------------------------------- Copies of your folders
@@ -1089,6 +1208,41 @@ namespace DiskSpace
             coverageCts = null;
             coverageRunning = false;
         }
+
+        // The card line that links a document folder to its backup check.
+        string CoverageLine(string folderPath)
+        {
+            FolderCoverage fc = CoverageOf(folderPath);
+            if (fc == null) return null;
+            switch (fc.State)
+            {
+                case CoverageState.TwoDrives:
+                    return "Second copy: on " + CopyDriveText(fc) + ", same files and sizes.";
+                case CoverageState.CopyDiffers:
+                    return "A copy on " + CopyDriveText(fc) + " differs from this folder.";
+                case CoverageState.OneCopy:
+                    return "No current copy on the drives connected now.";
+                default:
+                    return null;
+            }
+        }
+
+        FolderCoverage CoverageOf(string folderPath)
+        {
+            if (coverage == null || coverage.Folders == null || folderPath == null) return null;
+            string n = Norm(folderPath);
+            foreach (FolderCoverage fc in coverage.Folders)
+                if (fc.Source != null && fc.Source.Path != null && Norm(fc.Source.Path) == n) return fc;
+            return null;
+        }
+
+        static string CopyDriveText(FolderCoverage fc)
+        {
+            CoverageDrive d = fc.Best == null ? null : fc.Best.Drive;
+            string letter = d != null && d.Root != null ? d.Root.TrimEnd('\\') : fc.Best != null ? DriveLetter(fc.Best.Path) : "another drive";
+            return letter + (d == null ? "" : d.External ? " (External)" : " (Internal)");
+        }
+
 
         string NoCopyText()
         {
@@ -1299,8 +1453,18 @@ namespace DiskSpace
                 }
                 showHidden = true;
             }
+            if (dialog != null && dialog.StartsWith("protect-content", StringComparison.Ordinal)) snapContent = dialog;
             Navigate(protectPage);
             RefreshProtect();
+            if (dialog == "protect-content") { Task asking = AskContentConsent(); }
+            if ((dialog == "protect-content-run" || dialog == "protect-content-progress" || dialog == "protect-content-stopped") &&
+                protectHome != null)
+            {
+                // In memory only (SaveProtectStore does nothing in a snapshot), and only on a --protect-home
+                // fixture tree, so no capture reads real files. Without --protect-home the switch stays off.
+                protectStore.ContentScan = true;
+                ReadContentAgain();
+            }
             if (dialog == "protect-trust")
             {
                 foreach (ProtectCardVm c in protectCards)
@@ -1358,7 +1522,31 @@ namespace DiskSpace
             {
                 if (target == null) { target = protectHiddenLine; above = 160; }
             }
-            if (target == null) return;
+            if (dialog == "protect-content-progress" || dialog == "protect-content-stopped")
+            {
+                // The summary strip, the content-scan card with its progress, and the cards below.
+                target = protectContentCard;
+                above = 190;
+            }
+            if (dialog == "protect-content-run")
+            {
+                // The first card of a file with a key in its text.
+                foreach (ProtectCardVm c in protectCards)
+                {
+                    if (c.Group != "secret" || !c.Expanded) continue;
+                    target = protectFindings.ItemContainerGenerator.ContainerFromItem(c) as FrameworkElement;
+                    break;
+                }
+            }
+            ScrollProtectTo(target, above);
+        }
+
+        // Scrolls the Protect page so target sits "above" pixels below the top. Also used by "What Protect reads".
+        void ScrollProtectTo(FrameworkElement target, double above)
+        {
+            var page = protectPage as ScrollViewer;
+            if (page == null || target == null) return;
+            page.UpdateLayout();
             try
             {
                 Point at = target.TransformToAncestor(page).Transform(new Point(0, 0));
@@ -1375,6 +1563,8 @@ namespace DiskSpace
             timer.Tick += (s, e) =>
             {
                 bool done = !coverageRunning && (coverageTask == null || coverageTask.IsCompleted);
+                // The content scan's result is merged on the UI thread after its task ends, so both are waited for.
+                done = done && (contentTask == null || (contentTask.IsCompleted && !contentRunning));
                 if (!done && clock.Elapsed < TimeSpan.FromSeconds(20)) return;
                 timer.Stop();
                 then();
@@ -1382,129 +1572,32 @@ namespace DiskSpace
             timer.Start();
         }
 
-        // ---------------------------------------------------------------- Paths
 
-        // A path as ProtectContext stores it: backslashes, no trailing separator, upper case.
+        // ---------------------------------------------------------------- Paths (shared with the cards)
+
         static string Norm(string path)
         {
-            if (string.IsNullOrEmpty(path)) return "";
-            string p = path.Replace('/', '\\');
-            if (p.Length > 3) p = p.TrimEnd('\\');
-            return p.ToUpperInvariant();
+            return ProtectPaths.Norm(path);
         }
 
         static bool Under(string normalized, string root)
         {
-            if (root == null || normalized == null) return false;
-            if (normalized == root) return true;
-            string prefix = root.EndsWith("\\", StringComparison.Ordinal) ? root : root + "\\";
-            return normalized.StartsWith(prefix, StringComparison.Ordinal);
+            return ProtectPaths.Under(normalized, root);
         }
 
         static string ParentOf(string path)
         {
-            if (string.IsNullOrEmpty(path)) return null;
-            string p = path.Length > 3 ? path.TrimEnd('\\') : path;
-            int cut = p.LastIndexOf('\\');
-            if (cut < 0) return null;
-            if (cut == 2 && p[1] == ':') return cut + 1 >= p.Length ? null : p.Substring(0, 3);
-            return p.Substring(0, cut);
+            return ProtectPaths.ParentOf(path);
         }
 
         static string LastSegment(string path)
         {
-            if (string.IsNullOrEmpty(path)) return path;
-            string p = path.TrimEnd('\\');
-            int cut = p.LastIndexOf('\\');
-            return cut < 0 ? p : p.Substring(cut + 1);
+            return ProtectPaths.LastSegment(path);
         }
 
-        static bool IsDriveRoot(string path)
+        static string DriveLetter(string path)
         {
-            return path != null && path.TrimEnd('\\').Length == 2 && path[1] == ':';
-        }
-
-        static HashSet<string> KnownSet(ProtectContext ctx)
-        {
-            var set = new HashSet<string>(StringComparer.Ordinal);
-            if (ctx == null) return set;
-            foreach (string[] list in new[] { ctx.Downloads, ctx.Desktop, ctx.Documents, ctx.Pictures, ctx.Videos, ctx.Music })
-                if (list != null) foreach (string p in list) set.Add(p);
-            return set;
-        }
-
-        // The ancestor that is a direct child of a drive root, of Home, of a known folder or of Downloads. A file
-        // directly in a known folder (Downloads and Desktop included) has that folder as its top folder.
-        // Temp roots count as known folders here, so a file unzipped into Temp groups under that Temp folder and
-        // not under AppData.
-        static string TopFolder(string path, ProtectContext ctx)
-        {
-            string parent = ParentOf(path);
-            if (parent == null) return path;
-            HashSet<string> known = KnownSet(ctx);
-            if (ctx != null && ctx.TempRoots != null) foreach (string t in ctx.TempRoots) known.Add(t);
-            string home = ctx == null ? null : ctx.Home;
-            if (known.Contains(Norm(parent)) || IsDriveRoot(parent) || Norm(parent) == home) return parent;
-            string cur = parent;
-            while (true)
-            {
-                string up = ParentOf(cur);
-                if (up == null) return cur;
-                string nu = Norm(up);
-                if (known.Contains(nu) || nu == home || IsDriveRoot(up)) return cur;
-                cur = up;
-            }
-        }
-
-        // "Downloads\AccountStatements" for a folder in a known folder; the full path otherwise.
-        static string DisplayFolder(string folder, ProtectContext ctx)
-        {
-            if (folder == null) return "";
-            string n = Norm(folder);
-            if (ctx != null)
-            {
-                string[][] lists = { ctx.Downloads, ctx.Desktop, ctx.Documents, ctx.Pictures, ctx.Videos, ctx.Music, ctx.TempRoots };
-                string[] names = { "Downloads", "Desktop", "Documents", "Pictures", "Videos", "Music", "Temp" };
-                for (int i = 0; i < lists.Length; i++)
-                {
-                    if (lists[i] == null) continue;
-                    foreach (string k in lists[i])
-                    {
-                        if (n == k) return names[i];
-                        if (Under(n, k)) return names[i] + folder.Substring(k.EndsWith("\\", StringComparison.Ordinal) ? k.Length - 1 : k.Length);
-                    }
-                }
-                if (ctx.Home != null && n == ctx.Home) return "your user folder";
-            }
-            return folder;
-        }
-
-        // The deepest folder that holds every entry.
-        static string CommonFolder(List<ProtectEntry> entries)
-        {
-            string common = null;
-            foreach (ProtectEntry e in entries)
-            {
-                string dir = e.F.PatternId == "doc-scans-folder" ? e.Path : ParentOf(e.Path);
-                if (dir == null) continue;
-                if (common == null) { common = dir; continue; }
-                while (common != null && !Under(Norm(dir), Norm(common))) common = ParentOf(common);
-            }
-            return common;
-        }
-
-        // The Mail app's Attachments folder that holds a cached attachment.
-        static string AttachmentsFolder(string path)
-        {
-            int at = path.IndexOf("\\Attachments\\", StringComparison.OrdinalIgnoreCase);
-            return at < 0 ? ParentOf(path) : path.Substring(0, at + "\\Attachments".Length);
-        }
-
-        Node FolderNode(string path)
-        {
-            if (result == null || path == null) return null;
-            try { return result.FindNode(path); }
-            catch (Exception) { return null; }
+            return ProtectPaths.DriveLetter(path);
         }
     }
 }

@@ -59,6 +59,7 @@ namespace DiskSpace
                 Window.Top = -32000;
                 Window.ShowActivated = false;
                 Window.ShowInTaskbar = false;
+                if (options.Width > 0) Window.Width = Math.Max(Window.MinWidth, options.Width);
             }
             Window.Icon = AppIconFrame(32);
             WireShell();
@@ -230,7 +231,11 @@ namespace DiskSpace
             }
 
             Window.PreviewKeyDown += OnKeyDown;
-            Window.Closing += (s, e) => { if (cancel != null) cancel.Cancel(); };
+            Window.Closing += (s, e) =>
+            {
+                if (cancel != null) cancel.Cancel();
+                CancelContentScan();
+            };
         }
 
         void ShowPage(FrameworkElement page)
@@ -349,13 +354,15 @@ namespace DiskSpace
         }
 
         // allowOpen is false for files whose own app can run or import them (Protect offers only Show in Explorer
-        // for keys, certificates and sign-in files), so the menu leaves Open out.
-        void ShowMenu(Node n, UIElement target, bool allowOpen = true)
+        // for keys, certificates and sign-in files), so the menu leaves Open out. openAtLine, when given, adds
+        // Protect's "Open at line", which opens the file in a text editor and never through its association.
+        void ShowMenu(Node n, UIElement target, bool allowOpen = true, Action openAtLine = null)
         {
             var dir = n as DirNode;
             var file = n as FileNode;
             bool real = dir == null || !dir.Unaccounted;
             var menu = new ContextMenu { PlacementTarget = target, Placement = PlacementMode.MousePoint };
+            if (openAtLine != null) AddMenuItem(menu, "\uE8E5", "Open at line", real, openAtLine);
             if (allowOpen) AddMenuItem(menu, "\uE8E5", "Open", real, () => ShellOps.Open(n.FullPath));
             AddMenuItem(menu, "\uEC50", "Show in Explorer", real, () => ShellOps.ShowInExplorer(n.FullPath));
             AddMenuItem(menu, "\uE8C8", "Copy path", real, () => CopyPath(n));
@@ -468,6 +475,9 @@ namespace DiskSpace
             insights = await Task.Run(() => Insights.Find(r, elevated));
             movePlan = await Task.Run(() => MovePlan.For(r));
             if (result == r) StartCoverage();
+            // With the content scan on, the edited folder is read again (Rescan passes the new folder, Recycle the
+            // parent). Replace() already dropped the content findings of files that left the tree.
+            if (result == r) ContentAfterEdit(select as DirNode);
             var oldDir = old as DirNode;
             if (exploreFolder != null && oldDir != null && exploreFolder.IsUnder(oldDir))
                 exploreFolder = replacement as DirNode ?? old.Parent;

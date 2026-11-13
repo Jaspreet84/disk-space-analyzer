@@ -183,6 +183,11 @@ namespace DiskSpace
                             file.Flags = FileFlags.Compressed;
                         }
                     }
+                    // Only symbolic links and mount points are links. Cloud-files tags (a hydrated OneDrive file),
+                    // dedup and other tags leave the file a plain file, so synced files stay in the content scan.
+                    if ((attributes & Native.FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
+                        (fd.dwReserved0 == Native.IO_REPARSE_TAG_SYMLINK || fd.dwReserved0 == Native.IO_REPARSE_TAG_MOUNT_POINT))
+                        file.Flags |= FileFlags.Link;
                     file.Size = size;
                     fileBytes += size;
                     files.Add(file);

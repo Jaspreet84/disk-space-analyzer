@@ -162,6 +162,8 @@ namespace DiskSpace
 
             busy = true;
             CancelCoverage();
+            bool contentWasRunning = contentRunning;
+            CancelContentScan();
             pageBeforeScan = currentPage == scanPage ? homePage : currentPage;
             expectedBytes = 0;
             ulong available, total, free;
@@ -215,6 +217,7 @@ namespace DiskSpace
                 SetNavEnabled(true);
                 Navigate(pageBeforeScan);
                 if (result != null) StartCoverage();  // the earlier scan's check was stopped when this one began
+                if (result != null && contentWasRunning) ReadContentAgain();  // and so was its content scan
                 if (failure != null) ShowError("The scan failed. " + failure.Message);
                 else Toast("Scan stopped", "");
                 return;
@@ -233,6 +236,8 @@ namespace DiskSpace
             coverage = null;
             ForgetAllCopies();
             StartCoverage();
+            // The new result starts with empty content lists. With the switch on, its text files are read now.
+            ContentAfterScan();
             RefreshAll();
             Navigate(overviewPage);
             EventHandler h = ScanCompleted;
@@ -531,10 +536,7 @@ namespace DiskSpace
         // False for nodes that were removed from the tree (deleted or replaced by a rescan).
         bool Attached(Node n)
         {
-            if (result == null || n == null) return false;
-            for (; n.Parent != null; n = n.Parent)
-                if (Array.IndexOf(n.Parent.Children, n) < 0) return false;
-            return n == result.Root;
+            return result != null && result.IsAttached(n);
         }
 
         void RefreshExplore()
